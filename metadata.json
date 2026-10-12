@@ -1,0 +1,6 @@
+{
+  "name": "Dashboard FDV - Planificador",
+  "description": "Dashboard de Fuerza de Ventas con módulo de Planificación de Rutas.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

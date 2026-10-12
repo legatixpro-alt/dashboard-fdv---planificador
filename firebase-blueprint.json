@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "Degustacion": {
+      "title": "Degustacion",
+      "description": "Registro de solicitud y programación de degustación en punto de venta",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador único de la degustación"
+        },
+        "clienteCodigo": {
+          "type": "string",
+          "description": "Código del cliente en el sistema"
+        },
+        "clienteNombre": {
+          "type": "string",
+          "description": "Razón social del cliente o nombre comercial"
+        },
+        "vendedorNombre": {
+          "type": "string",
+          "description": "Nombre del vendedor que solicita la degustación"
+        },
+        "vendedorId": {
+          "type": "string",
+          "description": "ID o usuario canónico del vendedor"
+        },
+        "ruta": {
+          "type": "string",
+          "description": "Ruta asignada a la degustación"
+        },
+        "fecha": {
+          "type": "string",
+          "description": "Fecha programada en formato YYYY-MM-DD"
+        },
+        "turno": {
+          "type": "string",
+          "description": "Turno de la degustación (MAÑANA, TARDE, COMPLETO)",
+          "enum": ["MAÑANA", "TARDE", "COMPLETO"]
+        },
+        "productos": {
+          "type": "string",
+          "description": "Lista de productos a degustar separados por coma o JSON"
+        },
+        "kilosEstimados": {
+          "type": "number",
+          "description": "Kilos de producto calculados para la degustación"
+        },
+        "personasEstimadas": {
+          "type": "number",
+          "description": "Estimado de clientes o personas que degustarán"
+        },
+        "requierePromotora": {
+          "type": "boolean",
+          "description": "Si requiere asignación de impulsadora / promotora"
+        },
+        "promotoraAsignada": {
+          "type": "string",
+          "description": "Nombre de la promotora asignada por Trade Marketing"
+        },
+        "materialPop": {
+          "type": "boolean",
+          "description": "Si requiere stand y material publicitario POP"
+        },
+        "contactoPunto": {
+          "type": "string",
+          "description": "Nombre del encargado en tienda / punto de venta"
+        },
+        "telefonoContacto": {
+          "type": "string",
+          "description": "Teléfono de contacto en el punto de venta"
+        },
+        "observaciones": {
+          "type": "string",
+          "description": "Observaciones o requerimientos adicionales"
+        },
+        "estado": {
+          "type": "string",
+          "description": "Estado de la degustación",
+          "enum": ["SOLICITADA", "APROBADA", "RECHAZADA", "REALIZADA", "CANCELADA"]
+        },
+        "notasTradeMarketing": {
+          "type": "string",
+          "description": "Notas o retroalimentación del equipo de Trade Marketing"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Fecha y hora de creación ISO"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Fecha y hora de actualización ISO"
+        }
+      },
+      "required": ["clienteCodigo", "clienteNombre", "vendedorNombre", "fecha", "estado"]
+    },
+    "DegustacionConfig": {
+      "title": "DegustacionConfig",
+      "description": "Configuración global de cupos y disponibilidad para Trade Marketing",
+      "type": "object",
+      "properties": {
+        "maxPorDia": {
+          "type": "number",
+          "description": "Cantidad máxima de degustaciones simultáneas por día"
+        },
+        "diasBloqueados": {
+          "type": "string",
+          "description": "Fechas bloqueadas en formato JSON string o separadas por coma"
+        },
+        "anticipacionMinimaDias": {
+          "type": "number",
+          "description": "Días mínimos de anticipación para cargar una degustación"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Fecha de última modificación"
+        }
+      }
+    },
+    "AlkostoOrder": {
+      "title": "AlkostoOrder",
+      "description": "Pedidos de productos para las sucursales de Alkosto cargados por Sairú Valles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "numeroPedido": { "type": "string" },
+        "ordenCompraAlkosto": { "type": "string" },
+        "sucursalCodigo": { "type": "string" },
+        "sucursalNombre": { "type": "string" },
+        "vendedora": { "type": "string" },
+        "ruta": { "type": "string" },
+        "fechaPedido": { "type": "string" },
+        "fechaEntregaEstimada": { "type": "string" },
+        "totalBultos": { "type": "number" },
+        "totalKilos": { "type": "number" },
+        "totalUSD": { "type": "number" },
+        "estado": { "type": "string" },
+        "condicionPago": { "type": "string" },
+        "observaciones": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["sucursalCodigo", "sucursalNombre", "fechaPedido", "estado"]
+    }
+  },
+  "firestore": {
+    "/degustaciones/{degustacionId}": {
+      "schema": "Degustacion",
+      "description": "Colección de solicitudes de degustación cargadas por vendedores y gestionadas por Trade Marketing"
+    },
+    "/degustaciones_config/{configId}": {
+      "schema": "DegustacionConfig",
+      "description": "Configuraciones generales de disponibilidad de fechas de Trade Marketing"
+    },
+    "/alkosto_orders/{orderId}": {
+      "schema": "AlkostoOrder",
+      "description": "Colección de pedidos comerciales para Alkosto gestionados por Cuentas Clave"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper para verificar usuario autenticado (incluye Firebase Anonymous Auth usado por el cliente)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Reglas para Degustaciones (Trade Marketing)
+    match /degustaciones/{degustacionId} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+        && request.resource.data.keys().hasAll(['clienteCodigo', 'clienteNombre', 'vendedorNombre', 'fecha', 'estado']);
+      allow update: if isAuthenticated()
+        && request.resource.data.clienteNombre is string;
+      allow delete: if isAuthenticated();
+    }
+
+    // Reglas para Configuración de Degustaciones
+    match /degustaciones_config/{configId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Reglas para Pedidos Alkosto y Familia Center
+    match /alkosto_orders/{orderId} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+        && request.resource.data.keys().hasAll(['sucursalCodigo', 'fechaPedido', 'estado']);
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    // Reglas para Configuración de Sucursales y Cadenas
+    match /cadenas_config/{configId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Documento de test de conexión silencioso de Firebase SDK
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Bloqueo estricto por defecto a cualquier otra colección
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
