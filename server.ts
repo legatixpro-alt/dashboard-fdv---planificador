@@ -7,10 +7,18 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 
 dotenv.config();
 
+// Prevenir caídas del proceso por errores o rechazos no controlados en tareas asíncronas
+process.on('uncaughtException', (err) => {
+  console.error('[SERVER] Excepción no controlada capturada:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[SERVER] Promesa rechazada no controlada:', reason);
+});
+
 import { pcmToWav } from './pcmToWav';
 
-
-let cachedWorkbook = null;
+let cachedWorkbook: any = null;
 let lastFetchTime = 0;
 const CACHE_TTL = 30000; // 30 seconds
 
@@ -19,12 +27,34 @@ async function getWorkbook(force = false) {
     return cachedWorkbook;
   }
   const XLSX = await import('xlsx');
-  const fetchRes = await fetch('https://docs.google.com/spreadsheets/d/1PLzYEe9GG1vHb_wjd7HA93U6UQNtyP-uk8sxVfiN4sg/export?format=xlsx');
-  if (!fetchRes.ok) throw new Error("Failed to fetch XLSX");
-  const buffer = await fetchRes.arrayBuffer();
-  cachedWorkbook = XLSX.read(buffer, { type: 'array' });
-  lastFetchTime = Date.now();
-  return cachedWorkbook;
+
+  // 1. Intentar descargar en caliente desde Google Sheets
+  try {
+    const fetchRes = await fetch('https://docs.google.com/spreadsheets/d/1PLzYEe9GG1vHb_wjd7HA93U6UQNtyP-uk8sxVfiN4sg/export?format=xlsx');
+    if (fetchRes.ok) {
+      const buffer = await fetchRes.arrayBuffer();
+      cachedWorkbook = XLSX.read(buffer, { type: 'array' });
+      lastFetchTime = Date.now();
+      return cachedWorkbook;
+    }
+  } catch (err: any) {
+    console.warn("[SERVER] No se pudo obtener XLSX en vivo desde Google Sheets:", err?.message);
+  }
+
+  // 2. Fallback a copia local de respaldo sheet.xlsx
+  const localPath = path.join(process.cwd(), 'sheet.xlsx');
+  if (fs.existsSync(localPath)) {
+    try {
+      cachedWorkbook = XLSX.readFile(localPath);
+      lastFetchTime = Date.now();
+      return cachedWorkbook;
+    } catch (fsErr: any) {
+      console.warn("[SERVER] Error leyendo archivo local sheet.xlsx:", fsErr?.message);
+    }
+  }
+
+  if (cachedWorkbook) return cachedWorkbook;
+  throw new Error("No se pudo cargar el libro de datos ni en línea ni desde el respaldo local.");
 }
 
 
@@ -1872,25 +1902,48 @@ REGLAS ESTRICTAS PARA PRODUCCIÓN:
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    // Production serving
-    const distPath = path.join(process.cwd(), 'dist');
+  const distPath = path.join(process.cwd(), 'dist');
+  const distIndexExists = fs.existsSync(path.join(distPath, 'index.html'));
+
+  // Servir estáticos de producción si se especificó production o si existe dist y no es el script dev
+  const isDevMode = process.env.npm_lifecycle_event === 'dev' || process.env.NODE_ENV === 'development';
+
+  if (!isDevMode && distIndexExists) {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  } else {
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (vErr) {
+      console.error("[SERVER] Error al inicializar Vite en modo desarrollo, usando fallback a dist:", vErr);
+      if (distIndexExists) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[SERVER] Puerto ${PORT} ocupado.`);
+    } else {
+      console.error('[SERVER] Error en servidor HTTP:', err);
+    }
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[SERVER] Fallo al iniciar startServer:', err);
+});
