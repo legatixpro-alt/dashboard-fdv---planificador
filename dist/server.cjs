@@ -2304,6 +2304,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           const ejecutadoKg = parseFloat(row[c + 1]) || 0;
           if (metaKg > 0 || ejecutadoKg > 0) {
             volumenRows.push({
+              periodo: "2026-10",
               sku,
               articulo,
               categoria: cat,
@@ -2315,6 +2316,32 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             });
           }
         }
+      }
+    }
+    const metasRows = [];
+    const gridSheet = workbook.Sheets["Grid de Activaci\xF3n por Vendedor"];
+    if (gridSheet) {
+      const gridJson = XLSX.utils.sheet_to_json(gridSheet, { header: 1 });
+      for (let i = 2; i < gridJson.length; i++) {
+        const row = gridJson[i];
+        if (!row || !row[0]) continue;
+        const vName = String(row[0]).replace(/\s+/g, " ").trim();
+        const cats = [
+          { name: "ACEITE", metaIdx: 2, actIdx: 3 },
+          { name: "AZ\xDACAR", metaIdx: 4, actIdx: 5 },
+          { name: "POLLO", metaIdx: 6, actIdx: 7 },
+          { name: "ESTANDAR Y SUPERIOR ASTURIAS", metaIdx: 8, actIdx: 9 },
+          { name: "MORTADELA SALPICAO Y ASTURIAS", metaIdx: 10, actIdx: 11 }
+        ];
+        cats.forEach((c) => {
+          metasRows.push({
+            periodo: "2026-10",
+            vendedor_id: vName,
+            categoria: c.name,
+            meta: parseInt(row[c.metaIdx]) || 0,
+            activados: parseInt(row[c.actIdx]) || 0
+          });
+        });
       }
     }
     const findSheet = (patterns) => {
@@ -2362,6 +2389,17 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       }
     } catch (vErr) {
       console.warn("[SERVER] Error sincronizando ventas_volumen:", vErr?.message);
+    }
+    try {
+      if (metasRows.length > 0) {
+        await supabase.from("metas_activacion").delete().eq("periodo", "2026-10");
+        for (let i = 0; i < metasRows.length; i += 100) {
+          const batch = metasRows.slice(i, i + 100);
+          await supabase.from("metas_activacion").insert(batch);
+        }
+      }
+    } catch (mErr) {
+      console.warn("[SERVER] Error sincronizando metas_activacion:", mErr?.message);
     }
     let allClients = [];
     try {
@@ -2419,7 +2457,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     }
     return {
       countVolumen: volumenRows.length,
-      countActivacion: allClients.length
+      countActivacion: allClients.length,
+      countMetas: metasRows.length
     };
   }
   app2.post("/api/sync/sheets", authenticateToken, requireAdmin, async (req, res) => {
@@ -2436,6 +2475,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         message: "Sincronizaci\xF3n con Google Sheets y Supabase completada con \xE9xito",
         countVolumen: result.countVolumen,
         countActivacion: result.countActivacion,
+        countMetas: result.countMetas,
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       });
     } catch (err) {
@@ -3038,15 +3078,48 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const user = req.user;
       const force = req.query.force === "true";
       let vendorFilter = null;
+      let allowedAliases = [];
       if (user.role === "VENDEDOR") {
-        vendorFilter = (user.vendorId || user.username || "").toUpperCase().trim();
+        const prof = getVendorProfile(user.username || "");
+        allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
+        vendorFilter = (user.username || "").toUpperCase().trim();
       } else if (req.query.vendedor) {
         vendorFilter = String(req.query.vendedor).toUpperCase().trim();
+        if (vendorFilter && vendorFilter !== "ADMIN" && vendorFilter !== "TODOS") {
+          const prof = getVendorProfile(vendorFilter);
+          allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
+        }
       }
       const filterByVendor = (list) => {
         if (!vendorFilter || vendorFilter === "ADMIN" || vendorFilter === "TODOS") return list;
-        return list.filter((d) => (d.vendedorId || "").toUpperCase().includes(vendorFilter));
+        return list.filter((d) => {
+          const vId = (d.vendedorId || "").toUpperCase();
+          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+            if (vId.includes(vendorFilter) || vendorFilter.includes(vId)) return true;
+          }
+          return allowedAliases.some((a) => {
+            const aU = a.toUpperCase();
+            return vId.includes(aU) || aU.includes(vId);
+          });
+        });
       };
+      if (!force && supabase) {
+        try {
+          const { data, error } = await supabase.from("metas_activacion").select("*").eq("periodo", "2026-10");
+          if (!error && data && data.length > 0) {
+            const mapped = data.map((r) => ({
+              vendedorId: r.vendedor_id,
+              categoria: r.categoria,
+              meta: Number(r.meta) || 0,
+              activados: Number(r.activados) || 0
+            }));
+            cachedMetasParsed = mapped;
+            lastMetasParsedTime = Date.now();
+            return res.json(filterByVendor(mapped));
+          }
+        } catch (e) {
+        }
+      }
       if (!force && cachedMetasParsed && Date.now() - lastMetasParsedTime < PARSED_DATA_TTL) {
         return res.json(filterByVendor(cachedMetasParsed));
       }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, Suspense, lazy } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, Suspense, lazy } from 'react';
 import { Role, VolumenData, ActivacionData } from './types';
 import { fetchVolumenData, fetchActivacionData, fetchMetasActivacion, triggerSheetsSync } from './services/googleSheetsService';
 import { Lock, User as UserIcon, AlertCircle, ShieldCheck } from 'lucide-react';
@@ -125,30 +125,26 @@ export default function App() {
     }
   }, [userRole, loggedInVendor, currentVendorProfile, activeVendedorId]);
 
-  useEffect(() => {
-    let isMounted = true;
-    
-    async function loadData(force = false, showLoader = true) {
-      if (showLoader) setLoading(true);
-      try {
-        const targetVendor = (userRole === 'ADMIN' && activeVendedorId === 'ADMIN') ? undefined : activeVendedorId;
-        const [vol, act, metas] = await Promise.all([
-          fetchVolumenData(force, targetVendor),
-          fetchActivacionData(force, targetVendor),
-          fetchMetasActivacion(force, targetVendor)
-        ]);
-        if (isMounted) {
-          setVolumenData(vol);
-          setActivacionData(act);
-          setMetasActivacion(metas);
-        }
-      } catch (err) {
-        console.error("Error al sincronizar datos automáticamente", err);
-      } finally {
-        if (isMounted && showLoader) setLoading(false);
-      }
+  const loadData = useCallback(async (force = false, showLoader = true) => {
+    if (showLoader) setLoading(true);
+    try {
+      const targetVendor = (userRole === 'ADMIN' && activeVendedorId === 'ADMIN') ? undefined : activeVendedorId;
+      const [vol, act, metas] = await Promise.all([
+        fetchVolumenData(force, targetVendor),
+        fetchActivacionData(force, targetVendor),
+        fetchMetasActivacion(force, targetVendor)
+      ]);
+      setVolumenData(vol);
+      setActivacionData(act);
+      setMetasActivacion(metas);
+    } catch (err) {
+      console.error("Error al sincronizar datos automáticamente", err);
+    } finally {
+      if (showLoader) setLoading(false);
     }
+  }, [userRole, activeVendedorId]);
 
+  useEffect(() => {
     (window as any).refreshData = async () => {
       setLoading(true);
       try {
@@ -160,12 +156,20 @@ export default function App() {
       }
       await loadData(true, true);
     };
-    loadData(false, true);
+  }, [userRole, loadData]);
 
+  // Cargar datos al estar autenticado y mantener sincronizado cada 60s
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    loadData(false, false);
     const syncInterval = setInterval(() => {
       loadData(false, false);
     }, 60000);
+    return () => clearInterval(syncInterval);
+  }, [isLoggedIn, loadData]);
 
+  // Suscripción degustaciones y sesión Supabase
+  useEffect(() => {
     const unsubscribeDeg = subscribeDegustaciones((data) => {
       setDegustacionesList(data);
     });
@@ -182,13 +186,11 @@ export default function App() {
       return () => {
         subscription?.unsubscribe();
         unsubscribeDeg();
-        clearInterval(syncInterval);
       };
     }
 
     return () => {
       unsubscribeDeg();
-      clearInterval(syncInterval);
     };
   }, []);
 
@@ -249,6 +251,7 @@ export default function App() {
         saveAuthSession(data.token, data.user, initialRoute);
       }
       setIsLoggedIn(true);
+      loadData(true, true);
 
       if (hasValidSupabaseConfig) {
         supabase.from('trazabilidad_login').insert([{
@@ -371,8 +374,24 @@ export default function App() {
   }, [activacionData, activeVendedorId, loggedInVendor, userRole]);
 
   const filteredMetas = useMemo(() => {
-    return metasActivacion.filter(m => isRouteMatch(m.vendedorId, activeVendedorId, loggedInVendor, userRole));
-  }, [metasActivacion, activeVendedorId, loggedInVendor, userRole]);
+    const exactMatches = metasActivacion.filter(m => isRouteMatch(m.vendedorId, activeVendedorId, loggedInVendor, userRole));
+    if (exactMatches.length > 0) return exactMatches;
+
+    // Si no hay fila exacta para la sub-ruta seleccionada en el grid de metas, asociar con el perfil correspondiente
+    if (userRole === 'VENDEDOR' && currentVendorProfile) {
+      const allAliases = [currentVendorProfile.canonicalUsername, currentVendorProfile.displayName, ...currentVendorProfile.routes.flatMap(r => r.aliases)];
+      return metasActivacion.filter(m => matchesVendorAlias(allAliases, m.vendedorId));
+    }
+    if (userRole === 'ADMIN' && activeVendedorId !== 'ADMIN') {
+      const rawTarget = activeVendedorId.replace(/^CONSOLIDATED:/, '');
+      const prof = getVendorProfile(rawTarget);
+      if (prof) {
+        const allAliases = [prof.canonicalUsername, prof.displayName, ...prof.routes.flatMap(r => r.aliases)];
+        return metasActivacion.filter(m => matchesVendorAlias(allAliases, m.vendedorId));
+      }
+    }
+    return [];
+  }, [metasActivacion, activeVendedorId, loggedInVendor, userRole, currentVendorProfile]);
 
   // Cartera completa de clientes correspondientes a cada vendedor desde la base de datos
   const clientesParaDegustaciones = useMemo(() => {
