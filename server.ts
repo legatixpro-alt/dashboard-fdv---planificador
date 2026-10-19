@@ -33,6 +33,15 @@ import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
+// Polyfill WebSocket para compatibilidad total en Node.js < 22 con @supabase/realtime-js
+if (typeof (globalThis as any).WebSocket === 'undefined') {
+  try {
+    (globalThis as any).WebSocket = require('ws');
+  } catch {
+    (globalThis as any).WebSocket = class DummyWebSocket {} as any;
+  }
+}
+
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://nudltbgyewyiklqdyujk.supabase.co';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)

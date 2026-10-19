@@ -338,6 +338,14 @@ process.on("unhandledRejection", (reason, promise) => {
   }
   console.error("[SERVER] Promesa rechazada no controlada:", reason);
 });
+if (typeof globalThis.WebSocket === "undefined") {
+  try {
+    globalThis.WebSocket = require("ws");
+  } catch {
+    globalThis.WebSocket = class DummyWebSocket {
+    };
+  }
+}
 var SUPABASE_URL = process.env.SUPABASE_URL || "https://nudltbgyewyiklqdyujk.supabase.co";
 var SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 var supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY ? (0, import_supabase_js.createClient)(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }) : null;
