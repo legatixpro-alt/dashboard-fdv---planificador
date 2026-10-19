@@ -4,7 +4,7 @@ import {
   XCircle, Plus, Search, FileText, ChevronLeft, ChevronRight, 
   Download, Phone, UserCheck, Package, 
   Send, Sparkles, MessageSquare, Shield, Check, X, Building2,
-  CalendarCheck, Clock3, AlertTriangle, UserPlus, FileCheck2
+  CalendarCheck, Clock3, AlertTriangle, UserPlus, FileCheck2, RefreshCw
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -26,7 +26,8 @@ import {
   DEFAULT_HORARIO_TARDE,
   getWeekRange,
   countVendorDegustacionesInWeek,
-  getNextAvailableBookingDate
+  getNextAvailableBookingDate,
+  syncAllDegustacionesToGerencia
 } from '../services/degustacionesService';
 
 interface DegustacionesTabProps {
@@ -539,6 +540,24 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
     doc.save(`Codizulca_Degustaciones_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
+  const [isSyncingGerencia, setIsSyncingGerencia] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+
+  const handleSyncGerencia = async () => {
+    setIsSyncingGerencia(true);
+    setSyncStatusMsg(null);
+    try {
+      const res = await syncAllDegustacionesToGerencia(degustaciones);
+      setSyncStatusMsg(`Sincronización con Gerencia completada: ${res.success} enviadas (${res.failed} errores).`);
+      setTimeout(() => setSyncStatusMsg(null), 6000);
+    } catch (err: any) {
+      setSyncStatusMsg(`Error al sincronizar con Gerencia: ${err?.message || 'Error de red'}`);
+      setTimeout(() => setSyncStatusMsg(null), 6000);
+    } finally {
+      setIsSyncingGerencia(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       
@@ -573,6 +592,16 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
           {/* ACCIONES SUPERIORES */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
             <button
+              onClick={handleSyncGerencia}
+              disabled={isSyncingGerencia}
+              title="Sincronizar degustaciones con el Dashboard de Gerencia (https://dashboardgerencia01.ai.studio)"
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-60 text-neutral-300 hover:text-white px-3 sm:px-4 py-2.5 rounded-xl border border-neutral-800 text-xs font-sans font-bold transition-all active:scale-95 touch-manipulation shadow-sm cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 text-emerald-400 ${isSyncingGerencia ? 'animate-spin' : ''}`} />
+              <span>{isSyncingGerencia ? 'Sincronizando...' : 'Sincronizar Gerencia'}</span>
+            </button>
+
+            <button
               onClick={handleExportPDF}
               className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white px-3 sm:px-4 py-2.5 rounded-xl border border-neutral-800 text-xs font-sans font-bold transition-all active:scale-95 touch-manipulation shadow-sm"
             >
@@ -589,6 +618,13 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
             </button>
           </div>
         </div>
+
+        {syncStatusMsg && (
+          <div className="mt-4 p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl text-emerald-300 text-xs font-sans flex items-center gap-2.5 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{syncStatusMsg}</span>
+          </div>
+        )}
 
         {/* TARJETAS RESUMEN DE INDICADORES */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-neutral-900">

@@ -9,6 +9,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { AlkostoOrder, EstadoPedidoAlkosto, AlkostoOrderItem, ParsedOrdenCompraAlkosto } from '../types';
+import { getAuthHeaders } from './authService';
 
 export const ALKOSTO_COLLECTION = 'alkosto_orders';
 const STORAGE_KEY = 'dashboard_fdv_alkosto_orders_cache';
@@ -871,7 +872,10 @@ export async function saveAlkostoOrder(order: AlkostoOrder): Promise<AlkostoOrde
   try {
     fetch('/api/alkosto/pedidos', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
       body: JSON.stringify(order)
     }).catch(() => {});
   } catch {}
@@ -883,7 +887,10 @@ export async function transmitirPedidoAlkosto(order: AlkostoOrder): Promise<{ su
   try {
     const res = await fetch('/api/alkosto/pedidos/transmitir', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
       body: JSON.stringify(order)
     });
 
@@ -923,21 +930,48 @@ export async function transmitirPedidoAlkosto(order: AlkostoOrder): Promise<{ su
 export async function updateAlkostoOrderStatus(id: string, nuevoEstado: EstadoPedidoAlkosto): Promise<void> {
   const current = getLocalCache();
   const idx = current.findIndex(o => o.id === id);
+  const isEnviado = nuevoEstado === 'ENVIADO';
+  const nowIso = new Date().toISOString();
+
   if (idx >= 0) {
     current[idx].estado = nuevoEstado;
-    current[idx].updatedAt = new Date().toISOString();
+    if (isEnviado) {
+      current[idx].transmitido_a_pedidos_manuales = true;
+      current[idx].fecha_transmision = nowIso;
+    }
+    current[idx].updatedAt = nowIso;
     setLocalCache([...current]);
   }
 
   try {
     const docRef = doc(db, ALKOSTO_COLLECTION, id);
-    await updateDoc(docRef, {
+    const updatePayload: any = {
       estado: nuevoEstado,
-      updatedAt: new Date().toISOString()
-    });
+      updatedAt: nowIso
+    };
+    if (isEnviado) {
+      updatePayload.transmitido_a_pedidos_manuales = true;
+      updatePayload.fecha_transmision = nowIso;
+    }
+    await updateDoc(docRef, updatePayload);
   } catch (err) {
     console.warn("Error actualizando estado en Firestore:", err);
   }
+
+  try {
+    fetch(`/api/alkosto/pedidos/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({
+        status: nuevoEstado,
+        transmitido_a_pedidos_manuales: isEnviado ? true : undefined,
+        fecha_transmision: isEnviado ? nowIso : undefined
+      })
+    }).catch(() => {});
+  } catch {}
 }
 
 export async function updateAlkostoOrderObservacion(id: string, nuevaObservacion: string): Promise<void> {
@@ -979,7 +1013,10 @@ export async function parseAlkostoOrderImage(imageBase64: string, mimeType: stri
   try {
     const response = await fetch('/api/alkosto/ocr-orden', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
       body: JSON.stringify({ imageBase64, mimeType }),
       signal: controller.signal
     });

@@ -32,7 +32,7 @@ export const DEFAULT_CONFIG: DegustacionConfig = {
   maxPorTurnoManana: 9,
   maxPorTurnoTarde: 9,
   diasBloqueados: [],
-  anticipacionMinimaDias: 0
+  anticipacionMinimaDias: 2
 };
 
 const TEST_IDS_TO_EXCLUDE = ['deg-001', 'deg-002', 'deg-003', 'deg-mupk8tih-e3wf', 'deg-muplzpkm-ncuu', 'test-ping-01'];
@@ -231,34 +231,106 @@ export async function syncToGoogleSheets(degustacion: Degustacion): Promise<bool
   }
 }
 
-export const GERENCIA_SUPABASE_SURVEYS_URL = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_SURVEYS_URL || 'https://uterioexpfweghxfbvoa.supabase.co/rest/v1/surveys';
-export const GERENCIA_SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZXJpb2V4cGZ3ZWdoeGZidm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NTg3ODYsImV4cCI6MjEwMzUzNDc4Nn0.bZnN4vrXUDlcoIaI7l39O-bU4GQp05SvJdio_cn6niI';
+export const GERENCIA_SUPABASE_SURVEYS_URL = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_SURVEYS_URL || 'https://nudltbgyewyiklqdyujk.supabase.co/rest/v1/surveys';
+export const GERENCIA_SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51ZGx0Ymd5ZXd5aWtscWR5dWprIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTgzMDA3OCwiZXhwIjoyMTA3NDA2MDc4fQ.k92vdZiuVkTzAWNK8Fq71m1Xi_MoWtpx_eRQcZTw1cA';
+
+export function buildGerenciaSurveyPayload(degustacion: Degustacion) {
+  const normEstado = (degustacion.estado || 'SOLICITADA').toUpperCase();
+  let status = 'Solicitada';
+  if (normEstado === 'APROBADA') status = 'Aprobada';
+  else if (normEstado === 'RECHAZADA') status = 'Rechazada';
+  else if (normEstado === 'CANCELADA') status = 'Cancelada';
+  else if (normEstado === 'REALIZADA') status = 'Realizada';
+
+  let shift = 'Mañana (9:00 AM - 1:00 PM)';
+  if (degustacion.turno === 'TARDE') shift = 'Tarde (2:00 PM - 7:00 PM)';
+  else if (degustacion.turno === 'COMPLETO') shift = 'Día Completo';
+
+  const productListStr = Array.isArray(degustacion.productos)
+    ? degustacion.productos.join(', ')
+    : (degustacion.productos || 'Productos');
+
+  const commentsObj = {
+    isTasting: true,
+    degustacionId: degustacion.id,
+    id: degustacion.id,
+    client: degustacion.clienteNombre,
+    cliente: degustacion.clienteNombre,
+    clienteCodigo: degustacion.clienteCodigo || 'PDV',
+    store: degustacion.clienteNombre,
+    vendedor: degustacion.vendedorNombre,
+    salesRep: degustacion.vendedorNombre,
+    promoter: degustacion.promotoraAsignada || degustacion.vendedorNombre || 'Vendedor',
+    promotoraAsignada: degustacion.promotoraAsignada || '',
+    ruta: degustacion.ruta || degustacion.vendedorId || '',
+    date: degustacion.fecha || new Date().toISOString().split('T')[0],
+    turno: degustacion.turno || 'MAÑANA',
+    shift: shift,
+    time: degustacion.hora || (degustacion.turno === 'MAÑANA' ? '09:00 AM - 01:00 PM' : '02:00 PM - 07:00 PM'),
+    products: productListStr,
+    product: productListStr,
+    kilos: Number(degustacion.kilosEstimados) || 0,
+    kg: Number(degustacion.kilosEstimados) || 0,
+    personas: Number(degustacion.personasEstimadas) || 0,
+    personasEstimadas: Number(degustacion.personasEstimadas) || 0,
+    estado: normEstado,
+    status: status,
+    requierePromotora: Boolean(degustacion.requierePromotora),
+    promoterType: degustacion.requierePromotora ? 'Fija' : 'Vendedor / Impulso',
+    materialPop: degustacion.materialPop ? 'SI' : 'NO',
+    contactoPunto: degustacion.contactoPunto || '',
+    telefonoContacto: degustacion.telefonoContacto || '',
+    address: `Ruta: ${degustacion.ruta || degustacion.vendedorNombre || ''} | Contacto: ${degustacion.contactoPunto || ''} (${degustacion.telefonoContacto || ''})`,
+    notes: degustacion.observaciones || `Agendada por ${degustacion.vendedorNombre}. Kilos: ${degustacion.kilosEstimados}. Personas: ${degustacion.personasEstimadas}.`,
+    originalComments: degustacion.observaciones || `Agendada por ${degustacion.vendedorNombre}. Kilos: ${degustacion.kilosEstimados}. Personas: ${degustacion.personasEstimadas}.`,
+    notasTradeMarketing: degustacion.notasTradeMarketing || '',
+    resultado: degustacion.resultado || null
+  };
+
+  return {
+    type: 'Degustacion',
+    date: degustacion.fecha || new Date().toISOString().split('T')[0],
+    store: degustacion.clienteNombre,
+    promoter: degustacion.promotoraAsignada || degustacion.vendedorNombre || 'Vendedor',
+    product: productListStr,
+    comments: JSON.stringify(commentsObj)
+  };
+}
 
 export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise<boolean> {
   try {
-    const payload = {
-      type: 'Degustacion',
-      date: degustacion.fecha || new Date().toISOString().split('T')[0],
-      store: degustacion.clienteNombre,
-      promoter: degustacion.vendedorNombre || degustacion.vendedorId || 'Vendedor',
-      product: Array.isArray(degustacion.productos) ? degustacion.productos.join(', ') : (degustacion.productos || 'Productos'),
-      comments: JSON.stringify({
-        time: degustacion.hora || (degustacion.turno === 'MAÑANA' ? '09:00 AM - 01:00 PM' : '02:00 PM - 07:00 PM'),
-        address: `Ruta: ${degustacion.ruta || degustacion.vendedorNombre || ''} | Contacto: ${degustacion.contactoPunto || ''} (${degustacion.telefonoContacto || ''})`,
-        promoterType: degustacion.requierePromotora ? 'Fija' : 'Vendedor / Impulso',
-        isTasting: true,
-        estado: degustacion.estado || 'SOLICITADA',
-        originalComments: degustacion.observaciones || `Agendada por ${degustacion.vendedorNombre}. Kilos: ${degustacion.kilosEstimados}. Personas: ${degustacion.personasEstimadas}.`,
-        vendedor: degustacion.vendedorNombre,
-        clienteCodigo: degustacion.clienteCodigo,
-        kilos: degustacion.kilosEstimados,
-        personas: degustacion.personasEstimadas,
-        turno: degustacion.turno,
-        materialPop: degustacion.materialPop ? 'SI' : 'NO',
-        degustacionId: degustacion.id
-      })
-    };
+    const payload = buildGerenciaSurveyPayload(degustacion);
 
+    // 1. Comprobar si ya existe una encuesta registrada con este degustacionId
+    const searchUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${degustacion.id}*&select=id&limit=1`;
+    const searchRes = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'apikey': GERENCIA_SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+      }
+    });
+
+    if (searchRes.ok) {
+      const records = await searchRes.json();
+      if (Array.isArray(records) && records.length > 0 && records[0].id) {
+        // Actualizar registro existente mediante PATCH para no duplicar datos
+        const updateUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?id=eq.${records[0].id}`;
+        const patchRes = await fetch(updateUrl, {
+          method: 'PATCH',
+          headers: {
+            'apikey': GERENCIA_SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(payload)
+        });
+        return patchRes.ok;
+      }
+    }
+
+    // 2. Si no existe, insertar un nuevo registro con POST
     const res = await fetch(GERENCIA_SUPABASE_SURVEYS_URL, {
       method: 'POST',
       headers: {
@@ -275,6 +347,51 @@ export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise
     console.warn("Error sincronizando con el Dashboard de Gerencia:", err);
     return false;
   }
+}
+
+export async function deleteFromGerenciaDashboard(id: string): Promise<boolean> {
+  try {
+    const deleteUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${id}*`;
+    const res = await fetch(deleteUrl, {
+      method: 'DELETE',
+      headers: {
+        'apikey': GERENCIA_SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+      }
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn("Error eliminando del Dashboard de Gerencia:", err);
+    return false;
+  }
+}
+
+/**
+ * Sincroniza en lote todas las degustaciones con el Dashboard de Gerencia y Módulo de Trade Marketing
+ */
+export async function syncAllDegustacionesToGerencia(degustaciones: Degustacion[]): Promise<{ success: number; failed: number }> {
+  try {
+    const res = await fetch('/api/degustaciones/sync-gerencia', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: data.total || data.synced || degustaciones.length, failed: 0 };
+    }
+  } catch (err) {
+    console.warn("[TRADE SYNC] Fallback a sincronización cliente directa:", err);
+  }
+
+  let success = 0;
+  let failed = 0;
+  const validDegs = degustaciones.filter(d => d && d.id && !TEST_IDS_TO_EXCLUDE.includes(d.id));
+  for (const d of validDegs) {
+    const ok = await syncToGerenciaDashboard(d);
+    if (ok) success++;
+    else failed++;
+  }
+  return { success, failed };
 }
 
 /**
@@ -352,6 +469,15 @@ export async function deleteDegustacion(id: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${DEGUSTACIONES_COLLECTION}/${id}`);
   }
+
+  deleteFromGerenciaDashboard(id).catch(() => {});
+}
+
+export function formatYMD(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 /**
@@ -367,8 +493,8 @@ export function getWeekRange(dateStr: string): { startStr: string; endStr: strin
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
 
-  const startStr = monday.toISOString().split('T')[0];
-  const endStr = sunday.toISOString().split('T')[0];
+  const startStr = formatYMD(monday);
+  const endStr = formatYMD(sunday);
   const label = `${monday.toLocaleDateString('es-VE', { day: 'numeric', month: 'short' })} al ${sunday.toLocaleDateString('es-VE', { day: 'numeric', month: 'short' })}`;
 
   return { startStr, endStr, label };
@@ -427,7 +553,7 @@ export function getNextAvailableBookingDate(): string {
     testDate.setDate(now.getDate() + i);
     const day = testDate.getDay();
     if (day === 4 || day === 5 || day === 6) {
-      const dateStr = testDate.toISOString().split('T')[0];
+      const dateStr = formatYMD(testDate);
       const mondayDeadline = getMondayDeadlineForWeek(dateStr);
       if (now.getTime() <= mondayDeadline.getTime()) {
         return dateStr;
@@ -439,7 +565,7 @@ export function getNextAvailableBookingDate(): string {
   while (fallback.getDay() !== 4) {
     fallback.setDate(fallback.getDate() + 1);
   }
-  return fallback.toISOString().split('T')[0];
+  return formatYMD(fallback);
 }
 
 /**

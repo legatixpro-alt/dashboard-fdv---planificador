@@ -70,7 +70,8 @@ export function AlkostoTab({ vendedoraNombre = 'SAIRU VALLES', userRole = 'VENDE
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  // Filtros de Historial
+  // Filtros de Historial y segmentación de transmisión
+  const [historialTab, setHistorialTab] = useState<'pendientes' | 'transmitidos'>('pendientes');
   const [filtroEstado, setFiltroEstado] = useState<string>('TODOS');
   const [filtroSucursal, setFiltroSucursal] = useState<string>('TODAS');
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,19 +92,28 @@ export function AlkostoTab({ vendedoraNombre = 'SAIRU VALLES', userRole = 'VENDE
     return () => unsubscribe();
   }, []);
 
+  // Separación clara: Pendientes por enviar vs Ya transmitidos a Sala de Espera de Pedidos Manuales
+  const pedidosPendientes = useMemo(() => {
+    return orders.filter(o => o.estado === 'BORRADOR' || (!o.transmitido_a_pedidos_manuales && o.estado !== 'ENVIADO'));
+  }, [orders]);
+
+  const pedidosTransmitidos = useMemo(() => {
+    return orders.filter(o => o.estado === 'ENVIADO' || o.transmitido_a_pedidos_manuales);
+  }, [orders]);
+
   // Métricas generales de Alkosto
   const kpisAlkosto = useMemo(() => {
     const totalPedidos = orders.length;
     const kilosTotales = orders.reduce((acc, o) => acc + (o.totalKilos || 0), 0);
     const montoTotalUSD = orders.reduce((acc, o) => acc + (o.totalUSD || 0), 0);
-    const pedidosPendientes = orders.filter(o => o.estado === 'ENVIADO' || o.estado === 'BORRADOR').length;
     return {
       totalPedidos,
       kilosTotales: kilosTotales.toLocaleString('es-VE', { maximumFractionDigits: 1 }),
       montoTotalUSD: montoTotalUSD.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-      pedidosPendientes
+      pedidosPendientes: pedidosPendientes.length,
+      pedidosTransmitidos: pedidosTransmitidos.length
     };
-  }, [orders]);
+  }, [orders, pedidosPendientes, pedidosTransmitidos]);
 
   // Optimización y compresión client-side de imágenes para OCR rápido, nítido y liviano
   const optimizarImagenParaOCR = (file: File): Promise<{ base64: string; mimeType: string }> => {
@@ -213,7 +223,7 @@ export function AlkostoTab({ vendedoraNombre = 'SAIRU VALLES', userRole = 'VENDE
   // Copiar resumen de pedido para WhatsApp
   const handleCopiarWhatsApp = (pedido: AlkostoOrder) => {
     const texto = `🛒 *PEDIDO CODIZULCA - ALKOSTO*
-📋 *N° Pedido:* ${pedido.numeroPedido}
+📋 *N° Pedido:* ${pedido.correlativo || pedido.numeroPedido}
 🏢 *Sucursal:* ${pedido.sucursalNombre} (Cód. ${pedido.sucursalCodigo})
 📝 *OC Alkosto:* ${pedido.ordenCompraAlkosto || 'N/A'}
 📅 *Fecha:* ${pedido.fechaPedido} | *Entrega:* ${pedido.fechaEntregaEstimada}
@@ -236,16 +246,36 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
     });
   };
 
-  // Transmitir pedido a otro programa (Webhook & Supabase)
+  // Transmitir pedido directamente a la Sala de Espera del Gestor de Pedidos Manuales
   const handleTransmitir = async (pedido: AlkostoOrder) => {
     try {
-      setAlertaExito(`Transmitiendo pedido N° ${pedido.numeroPedido}...`);
-      const res = await transmitirPedidoAlkosto(pedido);
-      setAlertaExito(`¡Pedido N° ${pedido.numeroPedido} transmitido con éxito al programa externo y Google Sheets!`);
-      setTimeout(() => setAlertaExito(null), 4000);
+      const correlativoIdent = pedido.correlativo || pedido.numeroPedido;
+      setAlertaExito(`Transmitiendo pedido N° ${correlativoIdent} a la Sala de Espera de Pedidos Manuales...`);
+      await transmitirPedidoAlkosto(pedido);
+      await updateAlkostoOrderStatus(pedido.id, 'ENVIADO');
+
+      const nowIso = new Date().toISOString();
+      setOrders(prev => prev.map(o => o.id === pedido.id ? { 
+        ...o, 
+        estado: 'ENVIADO', 
+        transmitido_a_pedidos_manuales: true,
+        fecha_transmision: nowIso 
+      } : o));
+
+      if (pedidoDetalle && pedidoDetalle.id === pedido.id) {
+        setPedidoDetalle(prev => prev ? { 
+          ...prev, 
+          estado: 'ENVIADO', 
+          transmitido_a_pedidos_manuales: true,
+          fecha_transmision: nowIso 
+        } : null);
+      }
+
+      setAlertaExito(`¡Pedido N° ${correlativoIdent} transmitido con éxito! Ha viajado directamente a la Sala de Espera del Gestor de Pedidos Manuales.`);
+      setTimeout(() => setAlertaExito(null), 5000);
     } catch (err: any) {
       setAlertaError(`Error transmitiendo pedido: ${err.message}`);
-      setTimeout(() => setAlertaError(null), 4000);
+      setTimeout(() => setAlertaError(null), 5000);
     }
   };
 
@@ -258,14 +288,15 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
     await updateAlkostoOrderObservacion(pedidoId, observacion);
   };
 
-  // Filtrado del historial
+  // Filtrado del historial según sub-pestaña seleccionada (Pendientes vs Transmitidos)
   const pedidosFiltrados = useMemo(() => {
-    return orders.filter(o => {
+    const baseList = historialTab === 'pendientes' ? pedidosPendientes : pedidosTransmitidos;
+    return baseList.filter(o => {
       if (filtroEstado !== 'TODOS' && o.estado !== filtroEstado) return false;
       if (filtroSucursal !== 'TODAS' && o.sucursalCodigo !== filtroSucursal) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const coincideNum = o.numeroPedido.toLowerCase().includes(q);
+        const coincideNum = (o.numeroPedido || o.correlativo || '').toLowerCase().includes(q);
         const coincideOC = (o.ordenCompraAlkosto || '').toLowerCase().includes(q);
         const coincideSuc = o.sucursalNombre.toLowerCase().includes(q);
         const coincideProd = o.items.some(it => it.producto.toLowerCase().includes(q));
@@ -273,7 +304,7 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
       }
       return true;
     });
-  }, [orders, filtroEstado, filtroSucursal, searchQuery]);
+  }, [historialTab, pedidosPendientes, pedidosTransmitidos, filtroEstado, filtroSucursal, searchQuery]);
 
   return (
     <div className="space-y-6">
@@ -383,8 +414,10 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
                 : 'bg-neutral-900/80 text-neutral-400 hover:text-white hover:bg-neutral-800'
             }`}
           >
-            <Clock className="w-4 h-4 text-emerald-400" />
-            <span>Sala de Espera de Pedidos ({orders.length})</span>
+            <Send className="w-4 h-4 text-emerald-400" />
+            <span>
+              Bandeja de Pedidos {pedidosPendientes.length > 0 ? `(${pedidosPendientes.length} por enviar)` : '(0 en espera ✓)'}
+            </span>
           </button>
 
           <button
@@ -642,27 +675,52 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
       {activeView === 'historial' && (
         <div className="space-y-4">
           
-          {/* BANNER INFORMATIVO DE SALA DE ESPERA */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          {/* BANNER PRINCIPAL Y SELECTOR DE SUB-PESTAÑAS */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-4 shadow-xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl shrink-0">
-                <Clock className="w-5 h-5 text-emerald-400" />
+                <Send className="w-5 h-5 text-emerald-400" />
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm sm:text-base font-black text-white">Sala de Espera de Pedidos</h3>
+                  <h3 className="text-sm sm:text-base font-black text-white">Transmisión Directa a Pedidos Manuales</h3>
                   <span className="text-[10px] font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800/80 px-2 py-0.5 rounded-full">
-                    Correlativo Automático Activo
+                    Sincronización en Tiempo Real
                   </span>
                 </div>
                 <p className="text-xs text-neutral-400">
-                  El número correlativo es asignado de forma automática por orden de llegada mientras van ingresando los pedidos.
+                  Al transmitir, los pedidos viajan directamente a la Sala de Espera (CxC) de Pedidos Manuales sin quedar retenidos en tu aplicación.
                 </p>
               </div>
             </div>
 
-            <div className="text-xs text-neutral-400 font-mono bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded-xl">
-              Total en Cola: <strong className="text-white">{orders.length}</strong>
+            {/* SELECTOR DE SUB-PESTAÑAS */}
+            <div className="flex items-center bg-neutral-900 p-1 rounded-xl border border-neutral-800 shrink-0">
+              <button
+                type="button"
+                onClick={() => setHistorialTab('pendientes')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  historialTab === 'pendientes'
+                    ? 'bg-amber-600 text-white shadow-md'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Pendientes por Transmitir ({pedidosPendientes.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setHistorialTab('transmitidos')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  historialTab === 'transmitidos'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>En Sala de Espera Pedidos Manuales ({pedidosTransmitidos.length})</span>
+              </button>
             </div>
           </div>
 
@@ -713,31 +771,62 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
             </div>
           </div>
 
-          {/* LISTADO DE PEDIDOS */}
+          {/* LISTADO DE PEDIDOS SEGÚN SUB-PESTAÑA */}
           {pedidosFiltrados.length === 0 ? (
-            <div className="p-12 text-center bg-neutral-950 border border-neutral-800 rounded-2xl text-neutral-500 space-y-3">
-              <Store className="w-12 h-12 mx-auto text-neutral-600" />
-              <h3 className="text-base font-bold text-white">No hay pedidos registrados en el historial</h3>
-              <p className="text-xs max-w-sm mx-auto">
-                Carga un nuevo pedido usando el Lector OCR o el Formato Codizulca.
-              </p>
-              <button
-                onClick={() => setActiveView('ocr')}
-                className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-all shadow"
-              >
-                <ScanText className="w-4 h-4" />
-                <span>Escanear Primera Orden</span>
-              </button>
-            </div>
+            historialTab === 'pendientes' ? (
+              <div className="p-10 text-center bg-neutral-950 border border-emerald-900/40 rounded-2xl text-neutral-300 space-y-4 shadow-xl">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-black text-white">¡Sala de Espera de tu App Despejada!</h3>
+                  <p className="text-xs max-w-md mx-auto text-neutral-400 leading-relaxed">
+                    No tienes pedidos retenidos en la sala de espera de tu app. Todos los pedidos han viajado con éxito y de forma exacta a la <strong className="text-emerald-400">Sala de Espera del Gestor de Pedidos Manuales (CxC)</strong>.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
+                  <button
+                    onClick={() => setHistorialTab('transmitidos')}
+                    className="inline-flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-emerald-300 font-bold text-xs py-2.5 px-4 rounded-xl transition-all border border-emerald-800/60 cursor-pointer shadow-sm"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Ver Pedidos en Sala de Espera Manual ({pedidosTransmitidos.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveView('ocr')}
+                    className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-all shadow cursor-pointer"
+                  >
+                    <ScanText className="w-4 h-4" />
+                    <span>Escanear Nueva OC</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-10 text-center bg-neutral-950 border border-neutral-800 rounded-2xl text-neutral-400 space-y-3 shadow-xl">
+                <Store className="w-12 h-12 mx-auto text-neutral-600" />
+                <h3 className="text-base font-bold text-white">No hay pedidos transmitidos todavía</h3>
+                <p className="text-xs max-w-sm mx-auto text-neutral-500">
+                  Carga un nuevo pedido y transmítelo directamente para que viaje a la sala de espera de Pedidos Manuales.
+                </p>
+                <button
+                  onClick={() => setHistorialTab('pendientes')}
+                  className="inline-flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-white font-bold text-xs py-2 px-3.5 rounded-xl transition-all border border-neutral-700 cursor-pointer"
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Ver Pendientes por Transmitir</span>
+                </button>
+              </div>
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {pedidosFiltrados.map((ped) => {
+                const isTransmitido = ped.transmitido_a_pedidos_manuales || ped.estado === 'ENVIADO';
                 const badgeColor = 
+                  isTransmitido ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300 font-bold' :
                   ped.estado === 'ENTREGADO' ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400' :
                   ped.estado === 'DESPACHADO' ? 'bg-blue-950/60 border-blue-800 text-blue-400' :
                   ped.estado === 'APROBADO' ? 'bg-cyan-950/60 border-cyan-800 text-cyan-400' :
-                  ped.estado === 'ENVIADO' ? 'bg-amber-950/60 border-amber-800 text-amber-400' :
-                  'bg-neutral-900 border-neutral-700 text-neutral-400';
+                  'bg-amber-950/70 border-amber-700 text-amber-300 font-bold';
 
                 return (
                   <div
@@ -758,7 +847,7 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
                           </h4>
                         </div>
                         <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded-full uppercase border shrink-0 ${badgeColor}`}>
-                          {ped.estado}
+                          {isTransmitido ? 'En Espera (Pedidos Manuales)' : ped.estado}
                         </span>
                       </div>
 
@@ -836,15 +925,33 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
                     {/* BOTONES DE ACCIÓN */}
                     <div className="pt-3 border-t border-neutral-800 flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => handleTransmitir(ped)}
-                          className="bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 hover:text-emerald-200 px-2.5 py-1.5 rounded-xl text-xs font-bold border border-emerald-800/60 transition-colors flex items-center gap-1 shadow-sm"
-                          title="Enviar orden a bandeja y Google Sheets"
-                        >
-                          <Send className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-[11px]"> Enviar a bandeja</span>
-                        </button>
+                        {isTransmitido ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-700/80 px-2 py-1 rounded-xl">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>En Espera (CxC)</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleTransmitir(ped)}
+                              className="bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white px-2 py-1 rounded-xl text-xs font-bold border border-neutral-800 transition-colors flex items-center gap-1 cursor-pointer"
+                              title="Re-transmitir a Pedidos Manuales"
+                            >
+                              <RefreshCw className="w-3 h-3 text-neutral-400" />
+                              <span className="text-[10px]">Re-enviar</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleTransmitir(ped)}
+                            className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-950/50 cursor-pointer active:scale-95"
+                            title="Transmitir directamente a la Sala de Espera de Pedidos Manuales"
+                          >
+                            <Send className="w-3.5 h-3.5 text-white" />
+                            <span className="text-[11px]">Transmitir Directo</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -1149,10 +1256,10 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
               <button
                 type="button"
                 onClick={() => handleTransmitir(pedidoDetalle)}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 shadow"
+                className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.98] text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 shadow cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                <span> Enviar a bandeja</span>
+                <span>{pedidoDetalle.transmitido_a_pedidos_manuales || pedidoDetalle.estado === 'ENVIADO' ? '🔄 Re-transmitir a Pedidos Manuales' : '🚀 Transmitir Directo a Sala de Espera'}</span>
               </button>
 
               <button

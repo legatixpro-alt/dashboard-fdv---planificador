@@ -7,16 +7,87 @@ import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 
 dotenv.config();
 
-// Prevenir caídas del proceso por errores o rechazos no controlados en tareas asíncronas
-process.on('uncaughtException', (err) => {
+// Prevenir caídas del proceso por errores o rechazos no controlados en tareas asíncronas (como caídas de red o reconexiones VPN)
+process.on('uncaughtException', (err: any) => {
+  const msg = err?.message || String(err);
+  if (msg.includes('firestore') || msg.includes('GrpcConnection') || msg.includes('Name resolution failed') || err?.code === 14) {
+    console.warn('[SERVER] Advertencia de red Firestore capturada (VPN/DNS):', msg);
+    return;
+  }
   console.error('[SERVER] Excepción no controlada capturada:', err);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason: any, promise) => {
+  const msg = reason?.message || String(reason);
+  if (msg.includes('firestore') || msg.includes('GrpcConnection') || msg.includes('Name resolution failed') || reason?.code === 14) {
+    console.warn('[SERVER] Rechazo de red Firestore capturado (VPN/DNS):', msg);
+    return;
+  }
   console.error('[SERVER] Promesa rechazada no controlada:', reason);
 });
 
-import { pcmToWav } from './pcmToWav';
+import { db } from './src/lib/firebase';
+import { VENDOR_PROFILES, getVendorProfile } from './src/utils/vendorRoutes';
+import { collection, doc, getDocs, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { createClient } from '@supabase/supabase-js';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://nudltbgyewyiklqdyujk.supabase.co';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+  : null;
+
+const JWT_SECRET = process.env.JWT_SECRET || 'codizulca_super_secret_jwt_key_2026_fdv_secure_token_9x8y7z';
+
+// Middleware de autenticación segura vía JWT
+export function authenticateToken(req: any, res: any, next: any) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Token de autenticación requerido (Bearer token ausente)' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
+    if (err) {
+      return res.status(403).json({ success: false, error: 'Token inválido o expirado' });
+    }
+    req.user = decoded;
+    next();
+  });
+}
+
+export function requireAdmin(req: any, res: any, next: any) {
+  if (req.user && req.user.role === 'ADMIN') {
+    return next();
+  }
+  return res.status(403).json({ success: false, error: 'Acceso no autorizado: Se requieren privilegios de Administrador' });
+}
+
+// Control de rate limiting en memoria para evitar abusos o costos excesivos en APIs de IA
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+export function rateLimiter(windowMs: number, maxRequests: number, label: string) {
+  return (req: any, res: any, next: any) => {
+    const userKey = (req.user?.username || req.ip || 'anon') + ':' + label;
+    const now = Date.now();
+    const record = rateLimitMap.get(userKey);
+    if (!record || now > record.resetTime) {
+      rateLimitMap.set(userKey, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+    if (record.count >= maxRequests) {
+      const waitSec = Math.ceil((record.resetTime - now) / 1000);
+      return res.status(429).json({
+        success: false,
+        error: `Límite de solicitudes alcanzado para ${label}. Por favor espera ${waitSec} segundos.`
+      });
+    }
+    record.count++;
+    next();
+  };
+}
 
 let cachedWorkbook: any = null;
 let lastFetchTime = 0;
@@ -35,6 +106,10 @@ async function getWorkbook(force = false) {
       const buffer = await fetchRes.arrayBuffer();
       cachedWorkbook = XLSX.read(buffer, { type: 'array' });
       lastFetchTime = Date.now();
+      const localPath = path.join(process.cwd(), 'sheet.xlsx');
+      try {
+        fs.writeFileSync(localPath, Buffer.from(buffer));
+      } catch (_) {}
       return cachedWorkbook;
     }
   } catch (err: any) {
@@ -60,11 +135,17 @@ async function getWorkbook(force = false) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Middleware
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  app.use((err: any, req: any, res: any, next: any) => {
+    if (err instanceof SyntaxError && (err as any).status === 400 && 'body' in err) {
+      return res.status(400).json({ success: false, error: 'JSON malformado en la petición' });
+    }
+    next(err);
+  });
 
   // CORS Middleware para permitir sincronización directa con el dashboard de gerencia (https://dashboardgerencia01.ai.studio)
   app.use((req, res, next) => {
@@ -123,7 +204,7 @@ async function startServer() {
     'OSCAR ORTIZ': { password: '16347637', role: 'VENDEDOR', vendorId: '46' },
   };
 
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
@@ -131,7 +212,57 @@ async function startServer() {
       }
 
       const usuarioUpper = String(username).toUpperCase().trim();
-      
+      const pwd = String(password).trim();
+      const pwdClean = pwd.replace(/\D/g, '');
+
+      // 1. Intentar autenticación contra Supabase si la tabla existe
+      if (supabase) {
+        try {
+          const { data: supaUser, error: supaErr } = await supabase
+            .from('usuarios')
+            .select('*')
+            .eq('username', usuarioUpper)
+            .maybeSingle();
+
+          if (!supaErr && supaUser) {
+            const isBcrypt = supaUser.password_hash && supaUser.password_hash.startsWith('$2');
+            let isValid = false;
+            if (isBcrypt) {
+              isValid = await bcrypt.compare(pwd, supaUser.password_hash) || await bcrypt.compare(pwdClean, supaUser.password_hash);
+            } else {
+              isValid = (pwd === supaUser.password_hash) || (pwdClean === supaUser.password_hash);
+            }
+
+            if (isValid) {
+              const token = jwt.sign(
+                {
+                  username: supaUser.username,
+                  role: supaUser.role,
+                  vendorId: supaUser.vendor_id
+                },
+                JWT_SECRET,
+                { expiresIn: '7d' }
+              );
+
+              return res.json({
+                success: true,
+                token,
+                user: {
+                  username: supaUser.username,
+                  role: supaUser.role,
+                  vendorId: supaUser.vendor_id
+                },
+                source: 'supabase'
+              });
+            } else {
+              return res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
+            }
+          }
+        } catch (e: any) {
+          // Fallback a credenciales locales
+        }
+      }
+
       const normalizeForAuth = (s: string) => {
         return s
           .normalize('NFD')
@@ -157,8 +288,6 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Usuario no autorizado o no encontrado en la base de datos' });
       }
 
-      const pwd = String(password).trim();
-      const pwdClean = pwd.replace(/\D/g, '');
       const isMikel = usuarioUpper.includes('MIKELANGELO') || usuarioUpper.includes('SOTO') || usuarioUpper.includes('JOHNATAN');
       const isValidPwd = (pwd === creds.password) || (pwdClean === creds.password) || (isMikel && (pwdClean === '20863632' || pwdClean === '18395226'));
 
@@ -166,17 +295,41 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
       }
 
+      const token = jwt.sign(
+        {
+          username: usuarioUpper,
+          role: creds.role,
+          vendorId: creds.vendorId
+        },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
       return res.json({
         success: true,
+        token,
         user: {
           username: usuarioUpper,
           role: creds.role,
           vendorId: creds.vendorId
-        }
+        },
+        source: 'local'
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: 'Error interno en autenticación' });
     }
+  });
+
+  // Verificación de sesión activa y perfil del usuario autenticado
+  app.get("/api/auth/me", authenticateToken, (req: any, res: any) => {
+    return res.json({
+      success: true,
+      user: {
+        username: req.user.username,
+        role: req.user.role,
+        vendorId: req.user.vendorId
+      }
+    });
   });
 
   // ==============================================================
@@ -185,20 +338,74 @@ async function startServer() {
   // ==============================================================
   app.get("/api/degustaciones", async (req, res) => {
     try {
-      const { db } = await import('./src/lib/firebase');
-      const { collection, getDocs } = await import('firebase/firestore');
-
-      const snapshot = await getDocs(collection(db, 'degustaciones'));
-      let list: any[] = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        if (data && data.clienteNombre) {
-          list.push({
-            id: docSnap.id,
-            ...data
-          });
+      // 1. Intentar consultar directamente desde Supabase si está disponible
+      if (supabase) {
+        try {
+          let query = supabase.from('degustaciones').select('*');
+          if (req.query.vendedor) {
+            query = query.ilike('vendedor_nombre', `%${req.query.vendedor}%`);
+          }
+          if (req.query.estado) {
+            query = query.eq('estado', String(req.query.estado).toUpperCase().trim());
+          }
+          if (req.query.fecha) {
+            query = query.eq('fecha', String(req.query.fecha).trim());
+          }
+          const { data: supaList, error: supaErr } = await query.order('fecha', { ascending: false });
+          if (!supaErr && Array.isArray(supaList) && supaList.length > 0) {
+            const mapped = supaList.map((d: any) => ({
+              id: d.id,
+              clienteCodigo: d.cliente_codigo || 'PDV',
+              clienteNombre: d.cliente_nombre,
+              vendedorNombre: d.vendedor_nombre,
+              vendedorId: d.vendedor_id,
+              vendedorEmail: d.vendedor_email,
+              ruta: d.ruta,
+              fecha: d.fecha,
+              turno: d.turno,
+              hora: d.hora,
+              productos: d.productos,
+              kilosEstimados: Number(d.kilos_estimados) || 0,
+              personasEstimadas: Number(d.personas_estimadas) || 0,
+              requierePromotora: Boolean(d.requiere_promotora),
+              promotoraAsignada: d.promotora_asignada,
+              materialPop: Boolean(d.material_pop),
+              contactoPunto: d.contacto_punto,
+              telefonoContacto: d.telefono_contacto,
+              observaciones: d.observaciones,
+              estado: d.estado,
+              notasTradeMarketing: d.notas_trade_marketing,
+              resultado: d.resultado,
+              createdAt: d.created_at
+            }));
+            return res.json({
+              success: true,
+              count: mapped.length,
+              data: mapped,
+              source: 'supabase'
+            });
+          }
+        } catch (supaErr: any) {
+          // Fallback silencioso a Firestore si la tabla aún no existe
         }
-      });
+      }
+
+      // 2. Fallback a Firestore
+      let list: any[] = [];
+      try {
+        const snapshot = await getDocs(collection(db, 'degustaciones'));
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data && data.clienteNombre) {
+            list.push({
+              id: docSnap.id,
+              ...data
+            });
+          }
+        });
+      } catch (fsErr: any) {
+        console.warn("[SERVER] Fallback Firestore degustaciones no disponible (modo offline):", fsErr?.message);
+      }
 
       // Filtros opcionales
       if (req.query.vendedor) {
@@ -233,33 +440,219 @@ async function startServer() {
   });
 
   const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.VITE_GOOGLE_SHEETS_WEBHOOK_URL || 'https://script.google.com/macros/s/AKfycbx6JMUR1IubQuZ97Ics7emw_I0G9UAy-5vig4Vl8zPwW8yMBbZldvQGeGOPNiNbUmVTaQ/exec';
-  const GERENCIA_SUPABASE_SURVEYS_URL = process.env.GERENCIA_SUPABASE_SURVEYS_URL || process.env.VITE_GERENCIA_SUPABASE_SURVEYS_URL || 'https://uterioexpfweghxfbvoa.supabase.co/rest/v1/surveys';
-  const GERENCIA_SUPABASE_ANON_KEY = process.env.GERENCIA_SUPABASE_ANON_KEY || process.env.VITE_GERENCIA_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZXJpb2V4cGZ3ZWdoeGZidm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NTg3ODYsImV4cCI6MjEwMzUzNDc4Nn0.bZnN4vrXUDlcoIaI7l39O-bU4GQp05SvJdio_cn6niI';
+  const GERENCIA_SUPABASE_SURVEYS_URL = process.env.GERENCIA_SUPABASE_SURVEYS_URL || process.env.VITE_GERENCIA_SUPABASE_SURVEYS_URL || 'https://nudltbgyewyiklqdyujk.supabase.co/rest/v1/surveys';
+  const GERENCIA_SUPABASE_ANON_KEY = process.env.GERENCIA_SUPABASE_ANON_KEY || process.env.VITE_GERENCIA_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51ZGx0Ymd5ZXd5aWtscWR5dWprIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTgzMDA3OCwiZXhwIjoyMTA3NDA2MDc4fQ.k92vdZiuVkTzAWNK8Fq71m1Xi_MoWtpx_eRQcZTw1cA';
+
+  // Configuración de Supabase para el Programa de Pedidos Manuales (gestor-de-pedidos-pro)
+  const PEDIDOS_MANUALES_SUPABASE_URL = process.env.PEDIDOS_MANUALES_SUPABASE_URL || 'https://vxduxyrbeybhhbpdyqoc.supabase.co';
+  const PEDIDOS_MANUALES_SUPABASE_KEY = process.env.PEDIDOS_MANUALES_SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4ZHV4eXJiZXliaGhicGR5cW9jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwNzUxNTgsImV4cCI6MjEwNjY1MTE1OH0.sOgUaTLZ0NhlVYSLukAysyxRzggAicjM4n-u4H8NrQ4';
+
+  // Sincronizador bidireccional exacto para los archivos data_degustaciones.json de Trade Marketing
+  function syncToTradeMarketingJson(itemOrList: any | any[]) {
+    try {
+      const items = Array.isArray(itemOrList) ? itemOrList : [itemOrList];
+      const gerenciaPath = path.resolve(process.cwd(), '../codizulca-dashboard (3)/data_degustaciones.json');
+      const localPath = path.resolve(process.cwd(), 'data_degustaciones.json');
+
+      const targetPaths = [localPath];
+      if (fs.existsSync(path.dirname(gerenciaPath))) {
+        targetPaths.push(gerenciaPath);
+      }
+
+      for (const tPath of targetPaths) {
+        let existing: any[] = [];
+        try {
+          if (fs.existsSync(tPath)) {
+            existing = JSON.parse(fs.readFileSync(tPath, 'utf8') || '[]');
+          }
+        } catch (_) {}
+
+        const map = new Map<string, any>();
+        existing.forEach(e => { if (e && e.id) map.set(e.id, e); });
+
+        for (const item of items) {
+          if (!item || !item.id) continue;
+          let dmyDate = item.fecha || item.date;
+          if (dmyDate && /^\d{4}-\d{2}-\d{2}$/.test(dmyDate)) {
+            const [y, m, day] = dmyDate.split('-');
+            dmyDate = `${day}/${m}/${y}`;
+          }
+
+          let timeStr = item.hora || item.time;
+          if (!timeStr || !timeStr.trim()) {
+            if (item.turno === 'MAÑANA') timeStr = '09:00 - 13:00';
+            else if (item.turno === 'TARDE') timeStr = '14:00 - 18:00';
+            else timeStr = '09:00 - 18:00';
+          }
+
+          const productStr = Array.isArray(item.productos) 
+            ? item.productos.join(', ') 
+            : (item.productos || item.product || 'Embutidos y Refrigerados');
+
+          let status = 'scheduled';
+          const norm = (item.estado || item.status || 'SOLICITADA').toUpperCase().trim();
+          if (norm === 'REALIZADA' || norm === 'COMPLETED') status = 'completed';
+          else if (norm === 'CANCELADA' || norm === 'RECHAZADA' || norm === 'CANCELLED') status = 'cancelled';
+
+          const promoter = item.promotoraAsignada || item.promotora_asignada || item.promoter || item.vendedorNombre || item.vendedor_nombre || 'Por Asignar';
+          const promoterRole = (item.requierePromotora || item.requiere_promotora) ? 'Promotora' : 'Impulsadora';
+
+          const target = Number(item.personasEstimadas || item.personas_estimadas) || Math.round((Number(item.kilosEstimados || item.kilos_estimados) || 1) * 35) || 140;
+          const delivered = item.resultado?.porcionesEntregadas || item.delivered || 0;
+          const acceptance = item.resultado?.porcentajeAceptacion || item.acceptanceRate || (status === 'completed' ? 95 : 0);
+
+          const notes = [
+            item.observaciones || item.notes,
+            (item.notasTradeMarketing || item.notas_trade_marketing) ? `Notas Trade: ${item.notasTradeMarketing || item.notas_trade_marketing}` : '',
+            `Vendedor: ${item.vendedorNombre || item.vendedor_nombre || ''}`,
+            (item.contactoPunto || item.contacto_punto) ? `Contacto: ${item.contactoPunto || item.contacto_punto} (${item.telefonoContacto || item.telefono_contacto || ''})` : ''
+          ].filter(Boolean).join(' | ');
+
+          map.set(item.id, {
+            id: item.id,
+            date: dmyDate,
+            time: timeStr,
+            activity: `Impulso y Degustación ${productStr} - ${item.clienteNombre || item.cliente_nombre || item.client}`,
+            product: productStr,
+            promoter: promoter,
+            promoterRole: promoterRole,
+            client: item.clienteNombre || item.cliente_nombre || item.client,
+            zone: item.ruta || item.vendedorNombre || item.vendedor_nombre || 'Maracaibo',
+            status: status,
+            delivered: delivered,
+            target: target,
+            acceptanceRate: acceptance,
+            comments: notes
+          });
+        }
+
+        try {
+          fs.writeFileSync(tPath, JSON.stringify(Array.from(map.values()), null, 2), 'utf8');
+        } catch (err: any) {
+          console.warn(`[SYNC TRADE] Error al escribir en ${tPath}:`, err?.message);
+        }
+      }
+    } catch (e: any) {
+      console.warn("[SYNC TRADE] Error sincronizando archivo json de Trade Marketing:", e?.message);
+    }
+  }
+
+  function deleteFromTradeMarketingJson(id: string) {
+    try {
+      const gerenciaPath = path.resolve(process.cwd(), '../codizulca-dashboard (3)/data_degustaciones.json');
+      const localPath = path.resolve(process.cwd(), 'data_degustaciones.json');
+
+      const targetPaths = [localPath];
+      if (fs.existsSync(path.dirname(gerenciaPath))) targetPaths.push(gerenciaPath);
+
+      for (const tPath of targetPaths) {
+        if (!fs.existsSync(tPath)) continue;
+        const existing: any[] = JSON.parse(fs.readFileSync(tPath, 'utf8') || '[]');
+        const filtered = existing.filter(e => e.id !== id);
+        fs.writeFileSync(tPath, JSON.stringify(filtered, null, 2), 'utf8');
+      }
+    } catch (e: any) {
+      console.warn("[SYNC TRADE] Error eliminando de json Trade Marketing:", e?.message);
+    }
+  }
+
+  function buildGerenciaDirectPayload(item: any) {
+    const normEstado = (item.estado || item.status || 'SOLICITADA').toUpperCase();
+    let status = 'Solicitada';
+    if (normEstado === 'APROBADA') status = 'Aprobada';
+    else if (normEstado === 'RECHAZADA') status = 'Rechazada';
+    else if (normEstado === 'CANCELADA') status = 'Cancelada';
+    else if (normEstado === 'REALIZADA') status = 'Realizada';
+
+    let shift = 'Mañana (9:00 AM - 1:00 PM)';
+    if (item.turno === 'TARDE') shift = 'Tarde (2:00 PM - 7:00 PM)';
+    else if (item.turno === 'COMPLETO') shift = 'Día Completo';
+
+    const productListStr = Array.isArray(item.productos)
+      ? item.productos.join(', ')
+      : (item.productos || item.product || 'Productos');
+
+    const commentsObj = {
+      isTasting: true,
+      degustacionId: item.id,
+      id: item.id,
+      client: item.clienteNombre || item.cliente_nombre || item.client,
+      cliente: item.clienteNombre || item.cliente_nombre || item.client,
+      clienteCodigo: item.clienteCodigo || item.cliente_codigo || 'PDV',
+      store: item.clienteNombre || item.cliente_nombre || item.client,
+      vendedor: item.vendedorNombre || item.vendedor_nombre || item.vendedor,
+      salesRep: item.vendedorNombre || item.vendedor_nombre || item.vendedor,
+      promoter: item.promotoraAsignada || item.promotora_asignada || item.promoter || item.vendedorNombre || item.vendedor_nombre || 'Vendedor',
+      promotoraAsignada: item.promotoraAsignada || item.promotora_asignada || '',
+      ruta: item.ruta || item.vendedorId || item.vendedor_id || '',
+      date: item.fecha || item.date || new Date().toISOString().split('T')[0],
+      turno: item.turno || 'MAÑANA',
+      shift: shift,
+      time: item.hora || item.time || (item.turno === 'MAÑANA' ? '09:00 AM - 01:00 PM' : '02:00 PM - 07:00 PM'),
+      products: productListStr,
+      product: productListStr,
+      kilos: Number(item.kilosEstimados || item.kilos_estimados) || 0,
+      kg: Number(item.kilosEstimados || item.kilos_estimados) || 0,
+      personas: Number(item.personasEstimadas || item.personas_estimadas) || 0,
+      personasEstimadas: Number(item.personasEstimadas || item.personas_estimadas) || 0,
+      estado: normEstado,
+      status: status,
+      requierePromotora: Boolean(item.requierePromotora || item.requiere_promotora),
+      promoterType: (item.requierePromotora || item.requiere_promotora) ? 'Fija' : 'Vendedor / Impulso',
+      materialPop: (item.materialPop || item.material_pop) ? 'SI' : 'NO',
+      contactoPunto: item.contactoPunto || item.contacto_punto || '',
+      telefonoContacto: item.telefonoContacto || item.telefono_contacto || '',
+      address: `Ruta: ${item.ruta || item.vendedorNombre || item.vendedor_nombre || ''} | Contacto: ${item.contactoPunto || item.contacto_punto || ''} (${item.telefonoContacto || item.telefono_contacto || ''})`,
+      notes: item.observaciones || `Agendada por ${item.vendedorNombre || item.vendedor_nombre || ''}.`,
+      originalComments: item.observaciones || `Agendada por ${item.vendedorNombre || item.vendedor_nombre || ''}.`,
+      notasTradeMarketing: item.notasTradeMarketing || item.notas_trade_marketing || '',
+      resultado: item.resultado || null
+    };
+
+    return {
+      type: 'Degustacion',
+      date: item.fecha || item.date || new Date().toISOString().split('T')[0],
+      store: item.clienteNombre || item.cliente_nombre || item.client,
+      promoter: item.promotoraAsignada || item.promotora_asignada || item.vendedorNombre || item.vendedor_nombre || 'Vendedor',
+      product: productListStr,
+      comments: JSON.stringify(commentsObj)
+    };
+  }
 
   async function syncToGerenciaDirect(item: any) {
     try {
-      const payload = {
-        type: 'Degustacion',
-        date: item.fecha || item.fechaDegustacion || new Date().toISOString().split('T')[0],
-        store: item.clienteNombre,
-        promoter: item.vendedorNombre || item.vendedor || item.vendedorId || 'Vendedor',
-        product: Array.isArray(item.productos) ? item.productos.join(', ') : (item.productos || 'Productos'),
-        comments: JSON.stringify({
-          time: item.hora || (item.turno === 'MANANA' ? '09:00 AM - 01:00 PM' : '02:00 PM - 07:00 PM'),
-          address: `Ruta: ${item.ruta || item.vendedorNombre || ''} | Contacto: ${item.contactoPunto || ''} (${item.telefonoContacto || ''})`,
-          promoterType: item.requierePromotora ? 'Fija' : 'Vendedor / Impulso',
-          isTasting: true,
-          estado: item.estado || 'SOLICITADA',
-          originalComments: item.observaciones || `Agendada por ${item.vendedorNombre || ''}. Kilos: ${item.kilosEstimados || 0}. Personas: ${item.personasEstimadas || 0}.`,
-          vendedor: item.vendedorNombre,
-          clienteCodigo: item.clienteCodigo,
-          kilos: item.kilosEstimados,
-          personas: item.personasEstimadas,
-          turno: item.turno,
-          materialPop: item.materialPop ? 'SI' : 'NO',
-          degustacionId: item.id
-        })
-      };
+      // 1. Sincronizar en data_degustaciones.json (Local y Gerencia Trade Marketing)
+      syncToTradeMarketingJson(item);
+
+      // 2. Sincronizar en Supabase surveys
+      const payload = buildGerenciaDirectPayload(item);
+
+      const searchUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${item.id}*&select=id&limit=1`;
+      const searchRes = await fetch(searchUrl, {
+        method: 'GET',
+        headers: {
+          'apikey': GERENCIA_SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+        }
+      });
+
+      if (searchRes.ok) {
+        const records = await searchRes.json();
+        if (Array.isArray(records) && records.length > 0 && records[0].id) {
+          const updateUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?id=eq.${records[0].id}`;
+          await fetch(updateUrl, {
+            method: 'PATCH',
+            headers: {
+              'apikey': GERENCIA_SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(payload)
+          });
+          return;
+        }
+      }
 
       await fetch(GERENCIA_SUPABASE_SURVEYS_URL, {
         method: 'POST',
@@ -275,6 +668,67 @@ async function startServer() {
       console.warn("Failed to sync directly to Gerencia:", err);
     }
   }
+
+  async function deleteFromGerenciaDirect(id: string) {
+    try {
+      deleteFromTradeMarketingJson(id);
+      const deleteUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${id}*`;
+      await fetch(deleteUrl, {
+        method: 'DELETE',
+        headers: {
+          'apikey': GERENCIA_SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to delete from Gerencia:", err);
+    }
+  }
+
+  // ENDPOINT DE SINCRONIZACIÓN INTEGRAL DE DEGUSTACIONES CON TRADE MARKETING
+  app.post("/api/degustaciones/sync-gerencia", async (req, res) => {
+    try {
+      console.log("[SYNC TRADE] Sincronizando degustaciones de forma exacta y perfecta con Trade Marketing...");
+      let list: any[] = [];
+      if (supabase) {
+        const { data, error } = await supabase.from('degustaciones').select('*').order('fecha', { ascending: false });
+        if (!error && Array.isArray(data) && data.length > 0) {
+          list = data;
+        }
+      }
+
+      if (list.length === 0) {
+        try {
+          const snap = await getDocs(collection(db, 'degustaciones'));
+          snap.forEach(d => {
+            const data = d.data();
+            if (data && data.clienteNombre) list.push({ id: d.id, ...data });
+          });
+        } catch (_) {}
+      }
+
+      // 1. Sincronizar en data_degustaciones.json (Local y Gerencia Trade Marketing)
+      syncToTradeMarketingJson(list);
+
+      // 2. Sincronizar en Supabase surveys
+      let countSynced = 0;
+      for (const item of list) {
+        await syncToGerenciaDirect(item);
+        countSynced++;
+      }
+
+      res.json({
+        success: true,
+        message: "Degustaciones sincronizadas de forma exacta y perfecta con Trade Marketing",
+        total: list.length,
+        synced: countSynced,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error("[SYNC TRADE] Error en /api/degustaciones/sync-gerencia:", err);
+      res.status(500).json({ error: "Error sincronizando con Trade Marketing", details: err?.message });
+    }
+  });
 
   async function syncToGoogleScript(item: any) {
     try {
@@ -313,9 +767,6 @@ async function startServer() {
 
   app.post("/api/degustaciones", async (req, res) => {
     try {
-      const { db } = await import('./src/lib/firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-
       const item = req.body;
       if (!item || !item.clienteNombre || !item.fecha) {
         return res.status(400).json({ error: "Faltan campos obligatorios (clienteNombre, fecha)" });
@@ -328,7 +779,38 @@ async function startServer() {
         createdAt: item.createdAt || new Date().toISOString()
       };
 
+      // Guardar en Firestore para compatibilidad
       await setDoc(doc(db, 'degustaciones', id), record);
+
+      // Guardar en Supabase si está disponible
+      if (supabase) {
+        Promise.resolve(supabase.from('degustaciones').upsert({
+          id: record.id,
+          cliente_codigo: record.clienteCodigo || 'PDV',
+          cliente_nombre: record.clienteNombre,
+          vendedor_nombre: record.vendedorNombre || 'Vendedor',
+          vendedor_id: record.vendedorId || '1',
+          vendedor_email: record.vendedorEmail || null,
+          ruta: record.ruta || '',
+          fecha: record.fecha,
+          turno: record.turno || 'MAÑANA',
+          hora: record.hora || '',
+          productos: Array.isArray(record.productos) ? record.productos : [],
+          kilos_estimados: Number(record.kilosEstimados) || 0,
+          personas_estimadas: Number(record.personasEstimadas) || 0,
+          requiere_promotora: Boolean(record.requierePromotora),
+          promotora_asignada: record.promotoraAsignada || '',
+          material_pop: Boolean(record.materialPop),
+          contacto_punto: record.contactoPunto || '',
+          telefono_contacto: record.telefonoContacto || '',
+          observaciones: record.observaciones || '',
+          estado: record.estado || 'SOLICITADA',
+          notas_trade_marketing: record.notasTradeMarketing || '',
+          resultado: record.resultado || null,
+          created_at: record.createdAt
+        })).catch(err => console.warn("[SUPABASE] Error guardando degustación:", err?.message));
+      }
+
       syncToGoogleScript(record).catch(() => {});
       syncToGerenciaDirect(record).catch(() => {});
       res.json({ success: true, data: record });
@@ -342,13 +824,27 @@ async function startServer() {
     try {
       const { id } = req.params;
       const updates = req.body;
-      const { db } = await import('./src/lib/firebase');
-      const { doc, setDoc, getDoc } = await import('firebase/firestore');
 
       await setDoc(doc(db, 'degustaciones', id), updates, { merge: true });
       const snap = await getDoc(doc(db, 'degustaciones', id));
       if (snap.exists()) {
         const full = { id, ...snap.data() };
+
+        if (supabase) {
+          const supaUpdate: any = {};
+          if (updates.clienteNombre !== undefined) supaUpdate.cliente_nombre = updates.clienteNombre;
+          if (updates.vendedorNombre !== undefined) supaUpdate.vendedor_nombre = updates.vendedorNombre;
+          if (updates.estado !== undefined) supaUpdate.estado = updates.estado;
+          if (updates.notasTradeMarketing !== undefined) supaUpdate.notas_trade_marketing = updates.notasTradeMarketing;
+          if (updates.promotoraAsignada !== undefined) supaUpdate.promotora_asignada = updates.promotoraAsignada;
+          if (updates.resultado !== undefined) supaUpdate.resultado = updates.resultado;
+          if (updates.kilosEstimados !== undefined) supaUpdate.kilos_estimados = Number(updates.kilosEstimados) || 0;
+          if (updates.personasEstimadas !== undefined) supaUpdate.personas_estimadas = Number(updates.personasEstimadas) || 0;
+          supaUpdate.updated_at = new Date().toISOString();
+
+          Promise.resolve(supabase.from('degustaciones').update(supaUpdate).eq('id', id)).catch(err => console.warn("[SUPABASE] Error actualizando:", err?.message));
+        }
+
         syncToGoogleScript(full).catch(() => {});
         syncToGerenciaDirect(full).catch(() => {});
       }
@@ -359,13 +855,60 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/degustaciones/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      await deleteDoc(doc(db, 'degustaciones', id));
+      if (supabase) {
+        Promise.resolve(supabase.from('degustaciones').delete().eq('id', id)).catch(err => console.warn("[SUPABASE] Error eliminando:", err?.message));
+      }
+      deleteFromGerenciaDirect(id).catch(() => {});
+      res.json({ success: true, id });
+    } catch (err: any) {
+      console.error("Error deleting degustacion via API:", err);
+      res.status(500).json({ error: "Error al eliminar degustacion", details: err?.message });
+    }
+  });
+
   // ==============================================================
   // ENDPOINTS DE PEDIDOS ALKOSTO (CUENTAS CLAVE 2 - SAIRÚ VALLES)
   // ==============================================================
-  app.get("/api/alkosto/pedidos", async (req, res) => {
+  app.get("/api/alkosto/pedidos", authenticateToken, async (req: any, res: any) => {
     try {
-      const { db } = await import('./src/lib/firebase');
-      const { collection, getDocs } = await import('firebase/firestore');
+      if (supabase) {
+        try {
+          const { data: supaList, error: supaErr } = await supabase
+            .from('pedidos_alkosto')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (!supaErr && Array.isArray(supaList) && supaList.length > 0) {
+            const mapped = supaList.map((p: any) => ({
+              id: p.id,
+              numeroPedido: p.numero_pedido || '',
+              correlativo: p.correlativo || p.numero_pedido || '',
+              ordenCompraAlkosto: p.orden_compra_alkosto || '',
+              sucursalCodigo: p.sucursal_codigo || '',
+              sucursalNombre: p.sucursal_nombre || '',
+              vendedora: p.vendedora || 'SAIRU VALLES',
+              ruta: p.ruta || 'CUENTAS CLAVE 2',
+              fechaPedido: p.fecha_pedido,
+              fechaEntregaEstimada: p.fecha_entrega,
+              totalBultos: Number(p.total_bultos) || 0,
+              totalKilos: Number(p.total_kilos) || 0,
+              totalUSD: Number(p.total_usd) || 0,
+              condicionPago: p.condicion_pago || '',
+              items: p.items || [],
+              observaciones: p.observaciones || '',
+              status: p.status || 'PENDIENTE',
+              createdAt: p.created_at
+            }));
+            return res.json({ success: true, count: mapped.length, data: mapped, source: 'supabase' });
+          }
+        } catch (e: any) {
+          // Fallback silencioso a Firestore si la tabla no existe
+        }
+      }
 
       const snapshot = await getDocs(collection(db, 'alkosto_orders'));
       const list: any[] = [];
@@ -373,7 +916,7 @@ async function startServer() {
         list.push({ id: docSnap.id, ...docSnap.data() });
       });
       list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-      res.json({ success: true, count: list.length, data: list });
+      res.json({ success: true, count: list.length, data: list, source: 'firestore' });
     } catch (err: any) {
       console.error("Error fetching Alkosto orders:", err);
       res.status(500).json({ error: "Error fetching Alkosto orders", details: err?.message });
@@ -382,11 +925,164 @@ async function startServer() {
 
   async function syncAlkostoOrderToExternal(item: any) {
     try {
-      const itemsDesc = Array.isArray(item.items)
-        ? item.items.map((i: any) => `${i.producto || i.sku || 'Item'} (Cant: ${i.cantidadCajas || i.cantSolicitada || 0} cjs, Kilos: ${i.totalKilos || 0} kg, Sub: $${i.subtotalUSD || i.subtotal || 0})`).join(' | ')
-        : 'Productos Alkosto';
+      const correlativo = String(item.correlativo || item.numeroPedido || '').trim();
+      const orderId = String(item.id || `alk-${Date.now()}`).trim();
 
-      // 1. Enviar a Google Sheets Webhook
+      // Formatear renglones de artículos con la estructura exacta del Programa de Pedidos Manuales (gestor-de-pedidos-pro)
+      const gestorArticles = Array.isArray(item.items)
+        ? item.items.map((it: any) => ({
+            codigo: String(it.sku || it.codigo || "").trim(),
+            descripcion: String(it.producto || it.descripcion || "Item").trim(),
+            cantidad_solicitada: Number(it.cantidadCajas ?? it.cantSolicitada ?? it.cantidad ?? 0),
+            unidad_medida: String(it.presentacion || it.unid || it.unidad || "CJ").trim(),
+            precio_unitario: Number(it.precioUnitarioUSD ?? it.precio ?? 0),
+            sub_total: Number(it.subtotalUSD ?? it.subtotal ?? 0)
+          }))
+        : [];
+
+      const totalMonto = Number(item.totalUSD ?? item.total_usd ?? gestorArticles.reduce((acc: number, a: any) => acc + (a.sub_total || 0), 0));
+      const fechaValida = item.fechaPedido
+        ? (String(item.fechaPedido).includes('T') ? String(item.fechaPedido).split('T')[0] : String(item.fechaPedido))
+        : new Date().toISOString().split('T')[0];
+
+      const observacionesComb = [
+        item.observaciones ? String(item.observaciones).trim() : null,
+        item.ordenCompraAlkosto ? `OC Alkosto: ${String(item.ordenCompraAlkosto).trim()}` : null
+      ].filter(Boolean).join(" | ");
+
+      const rawOrder = {
+        id_cliente: String(item.sucursalCodigo || item.idCliente || "").trim(),
+        cliente: String(item.sucursalNombre || item.cliente || "ALKOSTO").trim(),
+        numero_pedido: correlativo,
+        ruta: String(item.ruta || "CUENTAS CLAVE 2").trim(),
+        supervisor: String(item.vendedora || "SAIRU VALLES").trim(),
+        chofer: String(item.chofer || "").trim(),
+        observaciones: observacionesComb,
+        fecha: fechaValida,
+        total_pedido: totalMonto,
+        monto_pedido: totalMonto,
+        sucursal: "Maracaibo",
+        articulos: gestorArticles
+      };
+
+      const supabaseOrderRow = {
+        id: orderId,
+        numero_pedido: correlativo || null,
+        cliente: rawOrder.cliente,
+        id_cliente: rawOrder.id_cliente || null,
+        ruta: rawOrder.ruta,
+        supervisor: rawOrder.supervisor,
+        chofer: rawOrder.chofer || null,
+        observaciones: rawOrder.observaciones || null,
+        fecha: fechaValida,
+        total_pedido: totalMonto,
+        monto_pedido: totalMonto,
+        status: "PENDIENTE_CXC", // <--- ENTRA DIRECTAMENTE A LA SALA DE ESPERA (CXC) DE PEDIDOS MANUALES
+        sucursal: "Maracaibo",
+        version: 1,
+        is_modified: false,
+        reject_reason: null,
+        cxc_note: null,
+        fact_note: null,
+        articulos: gestorArticles,
+        status_history: [
+          {
+            status: "CREADO",
+            department: "Ventas",
+            changedBy: rawOrder.supervisor || "SAIRU VALLES",
+            timestamp: new Date().toISOString()
+          }
+        ],
+        raw_order: rawOrder,
+        created_at: item.createdAt || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        is_archived: false
+      };
+
+      // 1. Envío directo al Supabase del Programa de Pedidos Manuales (Realtime Sala de Espera CxC)
+      try {
+        const ordersUrl = `${PEDIDOS_MANUALES_SUPABASE_URL.replace(/\/+$/, '')}/rest/v1/orders`;
+        const supaRes = await fetch(ordersUrl, {
+          method: 'POST',
+          headers: {
+            'apikey': PEDIDOS_MANUALES_SUPABASE_KEY,
+            'Authorization': `Bearer ${PEDIDOS_MANUALES_SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=representation'
+          },
+          body: JSON.stringify(supabaseOrderRow)
+        });
+        if (supaRes.ok) {
+          console.log(`[ALKOSTO -> PEDIDOS MANUALES] Pedido N° ${correlativo} (ID: ${orderId}) insertado exitosamente en Sala de Espera de Supabase (status: PENDIENTE_CXC)`);
+        } else {
+          const errTxt = await supaRes.text();
+          console.warn(`[ALKOSTO -> PEDIDOS MANUALES] Supabase aviso:`, supaRes.status, errTxt);
+        }
+      } catch (supaErr) {
+        console.error(`[ALKOSTO -> PEDIDOS MANUALES] Error conectando a Supabase Pedidos Manuales:`, supaErr);
+      }
+
+      // 2. Persistencia en archivo local orders.json del Gestor de Pedidos Manuales
+      try {
+        const ordersFilePath = path.resolve(process.cwd(), '../gestor-de-pedidos-pro/orders.json');
+        if (fs.existsSync(ordersFilePath)) {
+          const rawContent = fs.readFileSync(ordersFilePath, 'utf8');
+          let fileOrders: any[] = [];
+          try {
+            fileOrders = JSON.parse(rawContent);
+            if (!Array.isArray(fileOrders)) fileOrders = [];
+          } catch {}
+
+          const dbOrderObj = {
+            id: orderId,
+            status: "PENDIENTE_CXC",
+            isArchived: false,
+            createdAt: supabaseOrderRow.created_at,
+            updatedAt: supabaseOrderRow.updated_at,
+            sucursal: "Maracaibo",
+            version: 1,
+            order: rawOrder,
+            statusHistory: supabaseOrderRow.status_history
+          };
+
+          const existingIdx = fileOrders.findIndex(o => 
+            o.id === orderId || 
+            (o.order?.numero_pedido && correlativo && String(o.order.numero_pedido).trim() === correlativo)
+          );
+
+          if (existingIdx >= 0) {
+            fileOrders[existingIdx] = dbOrderObj;
+          } else {
+            fileOrders.unshift(dbOrderObj);
+          }
+
+          fs.writeFileSync(ordersFilePath, JSON.stringify(fileOrders, null, 2), 'utf8');
+          console.log(`[ALKOSTO -> PEDIDOS MANUALES] Pedido N° ${correlativo} guardado en orders.json de gestor-de-pedidos-pro`);
+        }
+      } catch (fErr) {
+        console.warn(`[ALKOSTO -> PEDIDOS MANUALES] No se pudo escribir localmente en orders.json:`, fErr);
+      }
+
+      // 3. Actualizar estado local a ENVIADO en Firestore y Supabase local para sacarlo de la sala de espera de la app de Sairú
+      try {
+        await setDoc(doc(db, 'alkosto_orders', orderId), {
+          estado: 'ENVIADO',
+          status: 'ENVIADO',
+          transmitido_a_pedidos_manuales: true,
+          fecha_transmision: new Date().toISOString()
+        }, { merge: true });
+
+        if (supabase) {
+          Promise.resolve(supabase.from('pedidos_alkosto').update({
+            status: 'ENVIADO',
+            updated_at: new Date().toISOString()
+          }).eq('id', orderId)).catch(err => console.warn("[SUPABASE LOCAL] Error actualizando estado a ENVIADO:", err?.message));
+        }
+      } catch (dbErr) {
+        console.warn(`[ALKOSTO] Error actualizando estado a ENVIADO en db local:`, dbErr);
+      }
+
+      // 4. Enviar a Google Sheets Webhook
       if (GOOGLE_SCRIPT_WEBHOOK_URL) {
         fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
           method: 'POST',
@@ -395,69 +1091,33 @@ async function startServer() {
             action: 'ADD_PEDIDO_ALKOSTO',
             tipo: 'PEDIDO_ALKOSTO',
             timestamp: new Date().toISOString(),
-            id: item.id,
-            numeroPedido: item.numeroPedido,
-            correlativo: item.correlativo || item.numeroPedido,
+            id: orderId,
+            numeroPedido: correlativo,
+            correlativo: correlativo,
             ordenCompraAlkosto: item.ordenCompraAlkosto,
             sucursalCodigo: item.sucursalCodigo,
             sucursalNombre: item.sucursalNombre,
             vendedora: item.vendedora || 'SAIRU VALLES',
             ruta: item.ruta || 'CUENTAS CLAVE 2',
-            fechaPedido: item.fechaPedido,
+            fechaPedido: fechaValida,
             fechaEntrega: item.fechaEntregaEstimada,
             totalBultos: item.totalBultos,
             totalKilos: item.totalKilos,
-            totalUSD: item.totalUSD,
-            condicionPago: item.condicionPago,
+            totalUSD: totalMonto,
+            condicionPago: item.condicionPago || 'Crédito 21 días',
             items: item.items,
-            observaciones: item.observaciones
+            observaciones: observacionesComb
           })
         }).catch(err => console.warn("Google script webhook alkosto error:", err));
       }
-
-      // 2. Enviar al programa externo (Supabase / ERP)
-      fetch(GERENCIA_SUPABASE_SURVEYS_URL, {
-        method: 'POST',
-        headers: {
-          'apikey': GERENCIA_SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify({
-          type: 'Pedido Alkosto',
-          date: item.fechaPedido || new Date().toISOString().split('T')[0],
-          store: item.sucursalNombre,
-          promoter: item.vendedora || 'SAIRU VALLES',
-          product: itemsDesc.substring(0, 500),
-          comments: JSON.stringify({
-            tipo: 'PEDIDO_ALKOSTO',
-            id: item.id,
-            numeroPedido: item.numeroPedido,
-            ordenCompraAlkosto: item.ordenCompraAlkosto,
-            sucursalCodigo: item.sucursalCodigo,
-            vendedora: item.vendedora || 'SAIRU VALLES',
-            ruta: item.ruta || 'CUENTAS CLAVE 2',
-            totalBultos: item.totalBultos,
-            totalKilos: item.totalKilos,
-            totalUSD: item.totalUSD,
-            condicionPago: item.condicionPago,
-            observaciones: item.observaciones,
-            items: item.items
-          })
-        })
-      }).catch(err => console.warn("Supabase external program alkosto error:", err));
 
     } catch (e) {
       console.warn("syncAlkostoOrderToExternal failure:", e);
     }
   }
 
-  app.post("/api/alkosto/pedidos", async (req, res) => {
+  app.post("/api/alkosto/pedidos", authenticateToken, async (req: any, res: any) => {
     try {
-      const { db } = await import('./src/lib/firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-
       const item = req.body;
       if (!item || !item.sucursalNombre) {
         return res.status(400).json({ error: "Falta sucursalNombre" });
@@ -467,7 +1127,6 @@ async function startServer() {
       // Asignar correlativo automáticamente en sala de espera si no viene asignado
       let correlativo = item.correlativo;
       if (!correlativo || correlativo === 'AUTO' || item.numeroPedido === 'PENDIENTE') {
-        const { getDocs, collection } = await import('firebase/firestore');
         const snap = await getDocs(collection(db, 'alkosto_orders')).catch(() => null);
         const total = snap ? snap.size : 0;
         correlativo = String(total + 1).padStart(4, '0');
@@ -483,6 +1142,28 @@ async function startServer() {
       };
       await setDoc(doc(db, 'alkosto_orders', id), record, { merge: true });
 
+      // Guardar en Supabase si está disponible
+      if (supabase) {
+        Promise.resolve(supabase.from('pedidos_alkosto').upsert({
+          id: record.id,
+          numero_pedido: record.numeroPedido || '',
+          correlativo: record.correlativo || record.numeroPedido || '',
+          orden_compra_alkosto: record.ordenCompraAlkosto || '',
+          sucursal_codigo: record.sucursalCodigo || '',
+          sucursal_nombre: record.sucursalNombre || '',
+          vendedora: record.vendedora || 'SAIRU VALLES',
+          ruta: record.ruta || 'CUENTAS CLAVE 2',
+          fecha_pedido: record.fechaPedido ? new Date(record.fechaPedido).toISOString().split('T')[0] : null,
+          total_bultos: Number(record.totalBultos) || 0,
+          total_kilos: Number(record.totalKilos) || 0,
+          total_usd: Number(record.totalUSD) || 0,
+          condicion_pago: record.condicionPago || '',
+          items: record.items || [],
+          observaciones: record.observaciones || '',
+          created_at: record.createdAt
+        })).catch(err => console.warn("[SUPABASE] Error guardando pedido Alkosto:", err?.message));
+      }
+
       // Transmisión automática del pedido al programa externo / Google Sheets
       syncAlkostoOrderToExternal(record).catch(() => {});
 
@@ -493,28 +1174,43 @@ async function startServer() {
     }
   });
 
-  app.post("/api/alkosto/pedidos/transmitir", async (req, res) => {
+  app.post("/api/alkosto/pedidos/transmitir", authenticateToken, async (req: any, res: any) => {
     try {
       const item = req.body;
       if (!item || (!item.id && !item.numeroPedido)) {
-        return res.status(400).json({ error: "Datos de pedido inválidos para transmisión" });
+        return res.status(400).json({ success: false, error: "Datos de pedido requeridos o inválidos para transmisión" });
       }
       await syncAlkostoOrderToExternal(item);
-      res.json({ success: true, message: "Pedido transmitido correctamente al programa externo y Google Sheets" });
+      res.json({ 
+        success: true, 
+        message: `Pedido N° ${item.correlativo || item.numeroPedido} transmitido directamente a la Sala de Espera del Gestor de Pedidos Manuales` 
+      });
     } catch (err: any) {
       console.error("Error transmitiendo pedido:", err);
-      res.status(500).json({ error: "Error transmitiendo pedido", details: err?.message });
+      res.status(500).json({ success: false, error: "Error transmitiendo pedido", details: err?.message });
     }
   });
 
-  app.put("/api/alkosto/pedidos/:id", async (req, res) => {
+  app.put("/api/alkosto/pedidos/:id", authenticateToken, async (req: any, res: any) => {
     try {
       const { id } = req.params;
       const updates = req.body;
-      const { db } = await import('./src/lib/firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
 
       await setDoc(doc(db, 'alkosto_orders', id), updates, { merge: true });
+
+      if (supabase) {
+        const supaUpdate: any = {};
+        if (updates.status !== undefined) supaUpdate.status = updates.status;
+        if (updates.observaciones !== undefined) supaUpdate.observaciones = updates.observaciones;
+        if (updates.items !== undefined) supaUpdate.items = updates.items;
+        if (updates.totalBultos !== undefined) supaUpdate.total_bultos = Number(updates.totalBultos) || 0;
+        if (updates.totalKilos !== undefined) supaUpdate.total_kilos = Number(updates.totalKilos) || 0;
+        if (updates.totalUSD !== undefined) supaUpdate.total_usd = Number(updates.totalUSD) || 0;
+        supaUpdate.updated_at = new Date().toISOString();
+
+        Promise.resolve(supabase.from('pedidos_alkosto').update(supaUpdate).eq('id', id)).catch(err => console.warn("[SUPABASE] Error actualizando pedido Alkosto:", err?.message));
+      }
+
       res.json({ success: true, id, updated: updates });
     } catch (err: any) {
       console.error("Error updating Alkosto order:", err);
@@ -522,13 +1218,13 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/alkosto/pedidos/:id", async (req, res) => {
+  app.delete("/api/alkosto/pedidos/:id", authenticateToken, async (req: any, res: any) => {
     try {
       const { id } = req.params;
-      const { db } = await import('./src/lib/firebase');
-      const { doc, deleteDoc } = await import('firebase/firestore');
-
       await deleteDoc(doc(db, 'alkosto_orders', id));
+      if (supabase) {
+        Promise.resolve(supabase.from('pedidos_alkosto').delete().eq('id', id)).catch(err => console.warn("[SUPABASE] Error eliminando pedido Alkosto:", err?.message));
+      }
       res.json({ success: true, id });
     } catch (err: any) {
       console.error("Error deleting Alkosto order:", err);
@@ -670,7 +1366,7 @@ async function startServer() {
   }
 
   // LECTOR OCR INTELIGENTE DE ÓRDENES DE COMPRA ALKOSTO Y FAMILIA CENTER CON LECTURA OPTIMIZADA DE CÓDIGOS
-  app.post("/api/alkosto/ocr-orden", async (req, res) => {
+  app.post("/api/alkosto/ocr-orden", authenticateToken, rateLimiter(10 * 60000, 20, 'OCR Orden Alkosto'), async (req: any, res: any) => {
     try {
       const { imageBase64, mimeType = "image/jpeg" } = req.body;
       if (!imageBase64) {
@@ -776,7 +1472,7 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
       };
 
       let rawResponseText = '';
-      const candidateModels = ["gemini-3.8-flash", "gemini-3.1-flash-lite"];
+      const candidateModels = ["gemini-3.1-flash-lite", "gemini-3.8-flash"];
       let lastModelError: any = null;
 
       for (const modelName of candidateModels) {
@@ -1132,7 +1828,8 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
       return res.json({ success: true, data: rootOrder });
     } catch (err: any) {
       console.error("Error en OCR Alkosto:", err);
-      return res.status(500).json({ error: "Error procesando orden de compra", details: err?.message });
+      const quota = /RESOURCE_EXHAUSTED|prepayment credits|quota|billing/i.test(String(err?.message || ''));
+      return res.status(quota ? 503 : 500).json({ error: quota ? "El lector automático (IA) no está disponible temporalmente. Ingresa la orden manualmente." : "Error procesando orden de compra" });
     }
   });
 
@@ -1180,9 +1877,6 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
 
   app.post("/api/cadenas/sincronizar", async (req, res) => {
     try {
-      const { db } = await import('./src/lib/firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-
       await setDoc(doc(db, 'cadenas_config', 'abreviaturas'), {
         ...ABREVIATURAS_CONFIG,
         updatedAt: new Date().toISOString()
@@ -1195,12 +1889,31 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
     }
   });
 
-  // Proxy / API Routes
-  app.post("/api/ocr", async (req, res) => {
+  let cachedBcvRate = 875.65;
+
+  // LECTOR OCR INTELIGENTE DE COMPROBANTES DE PAGO Y COBROS (BANCOS VENEZOLANOS)
+  app.post("/api/ocr", authenticateToken, rateLimiter(10 * 60000, 30, 'OCR Bancario'), async (req: any, res: any) => {
     try {
-      const { imageBase64 } = req.body;
-      if (!imageBase64) return res.status(400).json({ error: "Missing image" });
+      const { imageBase64, mimeType = "image/jpeg" } = req.body;
+      if (!imageBase64) return res.status(400).json({ error: "Falta la imagen del comprobante de pago" });
       
+      let cleanBase64 = String(imageBase64).trim();
+      let actualMime = mimeType;
+      if (cleanBase64.startsWith('data:')) {
+        const matches = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches) {
+          actualMime = matches[1];
+          cleanBase64 = matches[2];
+        }
+      }
+
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(503).json({ 
+          error: "API Key de Gemini no configurada en el servidor (GEMINI_API_KEY en .env). Por favor ingresa los datos del pago manualmente.",
+          manualEntryRequired: true
+        });
+      }
+
       const ai = new GoogleGenAI({
         apiKey: process.env.GEMINI_API_KEY,
         httpOptions: {
@@ -1209,104 +1922,220 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
           }
         }
       });
-      
-      let attempt = 0;
-      let maxAttempts = 5;
-      
-      while (attempt < maxAttempts) {
+
+      const prompt = `Analiza detalladamente esta imagen de comprobante bancario, captura de pantalla de Pago Móvil, transferencia o recibo de pago venezolano.
+Extrae la información financiera exacta de la transacción y devuelve estrictamente un objeto JSON con los siguientes campos:
+
+REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
+1. "banco": Nombre oficial del banco de origen o emisor. Ejemplos comunes:
+   - "Banco de Venezuela" (BDV, BDVenlínea, PagoMóvilBDV)
+   - "Banesco" (Banesco Pago Móvil, BanescOnline)
+   - "Banco Mercantil" (Mercantil Móvil, Tpago)
+   - "BBVA Banco Provincial" (Provinet Móvil, Dinero Rápido)
+   - "Bancamiga" (Bancamiga Pago Móvil)
+   - "Banco Nacional de Crédito (BNC)"
+   - "Bancaribe" (Mi Pago Bancaribe)
+   - "Banplus" (Pago Plus)
+   - "Banco Plaza" (Tu Pago Plaza)
+   - "Banco del Tesoro" (Tesoro Pago Móvil)
+   - "Banco Exterior", "Banco Bicentenario", "Zelle", "Dólares Efectivo".
+
+2. "monto": Número decimal exacto pagado en Bolívares o Dólares (punto para decimales).
+   - OJO VENEZUELA: Los recibos usan coma como decimal y punto como miles (ej: "Bs. 1.250,50" -> 1250.50; "Bs. 520,00" -> 520.00; "Bs. 5.400,00" -> 5400.00; "35,00 USD" -> 35.00).
+   - NUNCA omitas decimales ni multipliques por 100 (ej: 520,00 NUNCA es 52000).
+
+3. "referencia": El número de comprobante, secuencia, referencia bancaria o código de aprobación de la transacción (ej: "019283", "00281902", "12849201", "829103").
+   - IMPORTANTE: En Pago Móvil NUNCA extraigas el número de teléfono celular (0414..., 0424..., 0412..., 0416...) ni la cédula. Extrae estrictamente el NÚMERO DE REFERENCIA / SECUENCIA bancario. Elimina palabras como "REF", "NRO", "OP", "APROBACIÓN".
+
+4. "fecha_pago": Fecha en la que se efectuó el pago en formato YYYY-MM-DD.
+   - En Venezuela los comprobantes están en formato DD/MM/YYYY (ej: 12/10/2026 -> "2026-10-12").
+   - Si no aparece el año explícito pero sí el día y mes (ej: "12 Octubre"), asume el año en curso (2026).
+
+5. "titular": Nombre de la persona o comercio que REALIZÓ el pago (el emisor/ordenante/cliente).
+   - NUNCA pongas "Codizulca", "Distribuidora Codizulca" ni los datos de la cuenta receptora de la empresa.
+
+6. "rif": Cédula de Identidad o RIF del pagador/emisor (ej: "V-18293041", "J-30192834-0").`;
+
+      const cobroSchema = {
+        type: Type.OBJECT,
+        properties: {
+          banco: { type: Type.STRING },
+          monto: { type: Type.NUMBER },
+          referencia: { type: Type.STRING },
+          fecha_pago: { type: Type.STRING },
+          titular: { type: Type.STRING },
+          rif: { type: Type.STRING }
+        },
+        required: ["monto", "referencia"]
+      };
+
+      const candidateModels = ["gemini-3.1-flash-lite", "gemini-3.8-flash"];
+      let rawResponseText = '';
+      let lastModelError: any = null;
+
+      for (const modelName of candidateModels) {
         try {
           const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-lite",
-            contents: {
-              parts: [
-                { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-                { text: "Extrae la siguiente información de este recibo bancario o manuscrito y devuelve únicamente un JSON válido: banco (nombre completo oficial del banco, sin abreviaciones, ej: Banco de Venezuela, Banesco, Mercantil, etc), monto (numérico sin símbolos, usa punto para decimales), referencia (string), fecha_pago (formato YYYY-MM-DD. OJO: Los recibos venezolanos están en formato DD/MM/YYYY, por lo que 02/07/2026 es 2 de julio de 2026, es decir 2026-07-02), titular (quien envía el dinero, no el receptor), rif (RIF o Cédula de identidad del titular/remitente, ej: J-12345678-9, V-12345678), productos (lista de strings con los códigos o nombres de los artículos identificados). DICCIONARIO PARA RECONOCER CÓDIGOS Y PRODUCTOS CODIZULCA: 1496/7590377000077=MORTADELA ESPECIAL DE POLLO ASTURIAS 10X900G, 1519/1462=MORTADELA ESP D/POLLO SALPICAO 10X900G, 21=MORTADELA CORRAL 1X12, 1464=MORT. NAVIDEÑA ASTURIAS X KG, 1461=MORT. ESTANDAR ASTURIAS X KG, 1462=MORT. ESPECIAL COCIDA ASTURIAS, 1463=MORT. SUPERIOR ASTURIAS, 1512/100881=MORT. PECHUGA DE PAVO ASTURIAS, 1511/100882=MORT. PECHUGA DE POLLO ASTURIAS, 1561=MORT. PAVO SHOULDER, 1521=MORT. ECONOMICA ASTURIAS, 1522=MORT. AREPERO ASTURIAS, 1564=MORTADELA EXTRA, 1563=MORT. ESTANDAR SALPICAO, 1562=MORT. ESPECIAL SALPICAO, 1599=MORT. NAVIDEÑA SALPICAO, 927=MORTADELA CARACAS 10X900, 1051=MORTADELA CARACAS 10X500, 1242=MORT. CHORIZO ESPECIAL, 1446=CHULETA FRESCA ASTURIAS POR KG, 1088=CHULETA FRESCA IBERICO, 1445=TOCINO FRESCO ASTURIAS, 340=CHULETA AHUMADA ALIMEX, 171/100929=JAMON COC. SUPERIOR ALIMEX, 172=ESPALDA COCIDA ALIMEX, 241=ESPALDA VISKING ALIMEX, 439=ESPALDA AREPERO ALIMEX, 995=ESPALDA VISKING ITALICO, 337=JAMON ITALICO, 170=TOCINETA ALIMEX, 177=SALCHICHA VIENA 16X450, 176=SALCHICHA VIENA 8X800, POLLO/101=POLLO ENTERO, FILET/103=FILET DE POLLO, MUSLO/629=MUSLO CUADRIL, 630/ALAS=ALAS DESPRESADAS, 870=HIGADO, 393=MOLLEJA, QS=QUESO AMARILLO, 301/ACEITE=ACEITE VEGETAL, 302/AZUCAR=AZUCAR, 303/ARROZ=ARROZ 900G, 401/HUEVOS=HUEVOS BLANCOS, 1360=PATATAS MARQUISE, 1569=PATATAS DOBLE COBERTURA, UTH=LECHE LIQUIDA, LPV=LECHE EN POLVO VENCAMPO, JUGOS=JUGOS Y NECTAR, 1572=CAJAS DE PIZZA. Si no logras leer algo, devuélvelo como un string vacío \"\" en lugar de null." }
-              ]
-            },
+            model: modelName,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { inlineData: { mimeType: actualMime, data: cleanBase64 } },
+                  { text: prompt }
+                ]
+              }
+            ],
             config: {
               responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  banco: { type: Type.STRING },
-                  monto: { type: Type.NUMBER },
-                  referencia: { type: Type.STRING },
-                  fecha_pago: { type: Type.STRING },
-                  titular: { type: Type.STRING },
-                  rif: { type: Type.STRING }
-                }
-              }
+              responseSchema: cobroSchema,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              temperature: 0.1
             }
           });
-          
-          let result = JSON.parse(response.text || '{}');
-          return res.json(result);
-        } catch (error: any) {
-          const isRetryable = error.status === 429 || error.status === 503 || 
-            (error.message && (error.message.includes('429') || error.message.includes('503')));
-          
-          if (isRetryable) {
-            attempt++;
-            if (attempt >= maxAttempts) {
-              return res.status(503).json({ error: "El servicio de validación está saturado. Por favor, reintente en unos segundos." });
-            }
-            const baseDelay = 1000 * Math.pow(2, attempt);
-            const jitter = Math.random() * 500;
-            await new Promise(r => setTimeout(r, baseDelay + jitter));
-          } else {
-            console.error("Non-retryable OCR Error:", error);
-            return res.status(500).json({ error: error.message || "Error al procesar la imagen" });
-          }
+
+          rawResponseText = response.text || '';
+          if (rawResponseText) break;
+        } catch (err: any) {
+          lastModelError = err;
+          console.warn(`[OCR COBROS] Falló modelo ${modelName}, intentando siguiente:`, err?.message);
         }
       }
+
+      if (!rawResponseText) {
+        throw new Error(lastModelError?.message || "No se pudo extraer la información del comprobante.");
+      }
+
+      const parsed = JSON.parse(rawResponseText);
+
+      // Post-procesamiento y Sanitización Robusta
+      let refClean = String(parsed.referencia || '').trim();
+      refClean = refClean.replace(/^(REF|REFERENCIA|NRO|NUM|OPERACION|OP|SECUENCIA|APROB|APROBACION|#)[:\s-]*/gi, '').trim();
+
+      const montoNum = parseNumeroSeguro(parsed.monto);
+
+      let fechaClean = String(parsed.fecha_pago || '').trim();
+      if (/^\d{2}[/-]\d{2}[/-]\d{4}$/.test(fechaClean)) {
+        const parts = fechaClean.split(/[/-]/);
+        fechaClean = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaClean)) {
+        fechaClean = new Date().toISOString().split('T')[0];
+      }
+
+      let bancoClean = String(parsed.banco || '').trim();
+      if (/venezuela|bdv/i.test(bancoClean)) bancoClean = 'Banco de Venezuela';
+      else if (/banesco/i.test(bancoClean)) bancoClean = 'Banesco';
+      else if (/mercantil/i.test(bancoClean)) bancoClean = 'Banco Mercantil';
+      else if (/provincial|bbva/i.test(bancoClean)) bancoClean = 'BBVA Banco Provincial';
+      else if (/bancamiga/i.test(bancoClean)) bancoClean = 'Bancamiga';
+      else if (/bnc|nacional de cr/i.test(bancoClean)) bancoClean = 'Banco Nacional de Crédito (BNC)';
+      else if (/bancaribe/i.test(bancoClean)) bancoClean = 'Bancaribe';
+      else if (/banplus/i.test(bancoClean)) bancoClean = 'Banplus';
+      else if (/plaza/i.test(bancoClean)) bancoClean = 'Banco Plaza';
+      else if (/tesoro/i.test(bancoClean)) bancoClean = 'Banco del Tesoro';
+      else if (/zelle/i.test(bancoClean)) bancoClean = 'Zelle';
+
+      const sinReferencia = !refClean || /^(NO[_ ]?ENCONTRADA|NULL|N\/A)$/i.test(refClean);
+      if (montoNum <= 0 && sinReferencia) {
+        return res.status(422).json({
+          error: "No se pudo leer el comprobante. Toma la foto de frente, con buena luz y sin recortes, o ingresa los datos manualmente.",
+          code: 'OCR_EMPTY'
+        });
+      }
+
+      return res.json({
+        banco: bancoClean || '',
+        monto: montoNum,
+        referencia: sinReferencia ? '' : refClean,
+        fecha_pago: fechaClean,
+        titular: String(parsed.titular || '').trim(),
+        rif: String(parsed.rif || '').trim()
+      });
+
     } catch (err: any) {
-      console.error("OCR Outer Error:", err);
-      return res.status(500).json({ error: "Fallo inesperado al procesar comprobante" });
+      console.error("[OCR COBROS] Error procesando comprobante:", err);
+      const rawMsg = String(err?.message || '');
+      const isQuota = /RESOURCE_EXHAUSTED|prepayment credits|"code"\s*:\s*(402|429)|quota|billing/i.test(rawMsg);
+      if (isQuota) {
+        return res.status(503).json({
+          error: "El lector automático (IA) no está disponible temporalmente. Ingresa los datos del pago manualmente; el resto del módulo funciona con normalidad.",
+          code: 'AI_QUOTA_EXHAUSTED'
+        });
+      }
+      return res.status(500).json({ error: "No se pudo interpretar el comprobante. Puedes ingresar los datos manualmente." });
     }
   });
 
+  // TASA OFICIAL BCV CON MÚLTIPLES CAPAS DE FALLBACK Y RESILIENCIA
   app.get("/api/tasa-bcv", async (req, res) => {
     try {
       const dateStr = req.query.date as string;
-      if (!dateStr) return res.status(400).json({ error: "Missing date parameter" });
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return res.json({ tasa: cachedBcvRate });
+      }
 
-      // dateStr viene en formato YYYY-MM-DD
       const [year, month, day] = dateStr.split('-');
       const m = parseInt(month, 10);
       const d = parseInt(day, 10);
 
-      // 1. Intentar buscar la fecha exacta en el archivo histórico de dolarvzla
+      // 1. Histórico de dolarvzla para la fecha solicitada
       const historicalUrl = `https://rates.dolarvzla.com/bcv/${year}/${m}/${d}.json`;
-      
       try {
-        const histRes = await fetch(historicalUrl);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const histRes = await fetch(historicalUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (histRes.ok) {
           const histData = await histRes.json();
-          if (histData && histData.usd) {
-             return res.json({ tasa: Number(histData.usd.toFixed(2)) });
+          if (histData && typeof histData.usd === 'number' && histData.usd > 0) {
+            cachedBcvRate = Number(histData.usd.toFixed(2));
+            return res.json({ tasa: cachedBcvRate });
           }
         }
-      } catch (err) {
-        console.log("No se pudo obtener el histórico, intentando actual...", err);
+      } catch (err) {}
+
+      // 2. Si no encontró (por ej. fin de semana o feriado bancario), buscar hasta 3 días hacia atrás
+      const targetDate = new Date(`${dateStr}T12:00:00Z`);
+      for (let i = 1; i <= 3; i++) {
+        const prevDate = new Date(targetDate);
+        prevDate.setDate(targetDate.getDate() - i);
+        const py = prevDate.getUTCFullYear();
+        const pm = prevDate.getUTCMonth() + 1;
+        const pd = prevDate.getUTCDate();
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2000);
+          const prevRes = await fetch(`https://rates.dolarvzla.com/bcv/${py}/${pm}/${pd}.json`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (prevRes.ok) {
+            const prevData = await prevRes.json();
+            if (prevData && typeof prevData.usd === 'number' && prevData.usd > 0) {
+              cachedBcvRate = Number(prevData.usd.toFixed(2));
+              return res.json({ tasa: cachedBcvRate });
+            }
+          }
+        } catch (e) {}
       }
 
-      // 2. Fallback: buscar la tasa oficial actual si falló el histórico o no existe aún
-      const response = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
-      
-      if (!response.ok) {
-        throw new Error(`API respondió con status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data && data.promedio) {
-        res.json({ tasa: Number(data.promedio.toFixed(2)) });
-      } else {
-        res.status(404).json({ error: "Tasa no encontrada en la API" });
-      }
+      // 3. Fallback: tasa actual oficial en ve.dolarapi.com
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const currRes = await fetch("https://ve.dolarapi.com/v1/dolares/oficial", { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (currRes.ok) {
+          const data = await currRes.json();
+          if (data && typeof data.promedio === 'number' && data.promedio > 0) {
+            cachedBcvRate = Number(data.promedio.toFixed(2));
+            return res.json({ tasa: cachedBcvRate });
+          }
+        }
+      } catch (e) {}
+
+      // 4. Retornar último valor conocido en caché sin arrojar error 500
+      return res.json({ tasa: cachedBcvRate });
     } catch (err: any) {
-      console.error("Error fetching BCV rate:", err);
-      res.status(500).json({ error: "Error interno al consultar la tasa" });
+      return res.json({ tasa: cachedBcvRate });
     }
   });
 
@@ -1386,27 +2215,81 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
     }
   });
 
-  app.get("/api/client-lookup", async (req, res) => {
+  app.get("/api/client-lookup", authenticateToken, async (req: any, res: any) => {
     try {
       const codigo = req.query.codigo as string;
       if (!codigo) {
         return res.status(400).json({ error: "Missing 'codigo' parameter" });
       }
 
-      const { createClient } = await import('@supabase/supabase-js');
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const cleanCode = String(codigo).replace(/^[#\s]+/, '').trim();
+      const codeNoZeros = cleanCode.replace(/^0+/, '');
 
-      const { data, error } = await supabase
-        .from('clientes')
-        .select('*')
-        .eq('codigo', codigo)
-        .single();
+      let clientFound: any = null;
 
-      if (error || !data) {
+      if (supabase) {
+        try {
+          const { data: supaRows } = await supabase
+            .from('activacion_clientes')
+            .select('*')
+            .or(`cliente_codigo.eq.${cleanCode},cliente_codigo.eq.${codeNoZeros}`)
+            .limit(1);
+          if (supaRows && supaRows.length > 0) {
+            clientFound = supaRows[0];
+          }
+        } catch (sErr: any) {
+          console.warn("[SERVER] Error consultando Supabase en client-lookup:", sErr?.message);
+        }
+      }
+
+      if (!clientFound && cachedActivacionParsed && cachedActivacionParsed.length > 0) {
+        const match = cachedActivacionParsed.find(c => {
+          const cId = String(c.id || c.cliente_codigo || '').replace(/^[#\s]+/, '').trim();
+          const cNoZeros = cId.replace(/^0+/, '');
+          return cId === cleanCode || (codeNoZeros && cNoZeros === codeNoZeros);
+        });
+        if (match) {
+          clientFound = {
+            cliente_nombre: match.cliente || match.cliente_nombre,
+            vendedor_nombre: match.vendedorNombre || match.vendedorId,
+            cliente_codigo: match.id || match.cliente_codigo
+          };
+        }
+      }
+
+      if (!clientFound) {
+        try {
+          const workbook = await getWorkbook(false);
+          const XLSX = await import('xlsx');
+          const sheetName = workbook.SheetNames.find((s: string) => /activacion|clientes/i.test(s));
+          if (sheetName) {
+            const sheet = workbook.Sheets[sheetName];
+            const rows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            for (let r = 1; r < rows.length; r++) {
+              const row = rows[r];
+              if (!row || !row[0]) continue;
+              const rCode = String(row[0]).replace(/^[#\s]+/, '').trim();
+              const rNoZeros = rCode.replace(/^0+/, '');
+              if (rCode === cleanCode || (codeNoZeros && rNoZeros === codeNoZeros)) {
+                clientFound = {
+                  cliente_nombre: String(row[1] || '').trim(),
+                  vendedor_nombre: String(row[2] || '').trim(),
+                  cliente_codigo: rCode
+                };
+                break;
+              }
+            }
+          }
+        } catch (wbErr: any) {
+          console.warn("[SERVER] Fallback workbook client lookup error:", wbErr?.message);
+        }
+      }
+
+      if (!clientFound) {
         return res.status(404).json({ error: "Cliente no encontrado" });
       }
+
+      const data = clientFound;
 
       let vendedorNombre = data.vendedor_nombre;
       let vendedorEmail = '';
@@ -1415,11 +2298,11 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
         vendedorEmail = 'Mikelangelodiaz@gmail.com';
       }
       return res.json({ 
-        nombre: data.razon_social, 
+        nombre: data.cliente_nombre || data.razon_social || '', 
         vendedor: vendedorNombre, 
         vendedorEmail: vendedorEmail, 
-        direccion: data.direccion, 
-        ruc: data.codigo 
+        direccion: data.direccion || '', 
+        ruc: data.cliente_codigo || data.codigo || ''
       });
 
     } catch (err: any) {
@@ -1428,10 +2311,566 @@ REGLAS CRÍTICAS PARA LA LECTURA DE CÓDIGOS DE PRODUCTOS:
     }
   });
 
-  app.get("/api/data/volumen", async (req, res) => {
+  async function syncWorkbookToSupabase(workbook: any) {
+    if (!supabase) return { countVolumen: 0, countActivacion: 0 };
+    const XLSX = await import('xlsx');
+
+    // 1. Extraer Volumen por SKU
+    const volumenRows: any[] = [];
+    const volSheet = workbook.Sheets['Volumen por SKU'];
+    if (volSheet) {
+      const volJson = XLSX.utils.sheet_to_json(volSheet, {header: 1});
+      const header0 = volJson[0] as any[]; 
+      for (let r = 2; r < volJson.length; r++) {
+        const row = volJson[r] as any[];
+        if (!row || !row[0]) continue;
+        const sku = String(row[0]).trim();
+        const articulo = String(row[1] || '').trim();
+        
+        let cat = 'OTROS';
+        const artU = articulo.toUpperCase();
+        const skuU = sku.toUpperCase();
+
+        if (sku === '1461' || sku === '1463' || artU.includes('ESTANDAR ASTURIAS') || artU.includes('SUPERIOR ASTURIAS')) {
+          cat = 'ESTANDAR Y SUPERIOR ASTURIAS';
+        } else if (artU.includes('MORTADELA') || artU.includes('MORT.') || artU.includes('SALPICAO') || sku === '1464' || sku === '1462' || sku === '1512' || sku === '1521' || sku === '1561' || sku === '1522' || sku === '1563' || sku === '1562' || sku === '1564' || sku === '1519' || sku === '1496') {
+          cat = 'MORTADELA SALPICAO Y ASTURIAS';
+        } else if (skuU === 'ACEITE' || artU.includes('ACEITE')) {
+          cat = 'ACEITE';
+        } else if (skuU === 'AZUCAR' || skuU === 'AZÚCAR' || artU.includes('AZUCAR') || artU.includes('AZÚCAR')) {
+          cat = 'AZÚCAR';
+        } else if (skuU === 'POLLO' || skuU === 'FILET' || skuU === 'MUSLO' || skuU === '630' || skuU === '870' || skuU === '393' || artU.includes('POLLO ENTERO') || artU.includes('FILET') || artU.includes('MUSLO') || artU.includes('ALAS DESPRESADAS') || artU.includes('HIGADO') || artU.includes('MOLLEJA')) {
+          cat = 'POLLO';
+        }
+
+        for (let c = 2; c < header0.length; c += 3) {
+          const vendorName = String(header0[c] || '').replace(/\s+/g, ' ').trim();
+          if (!vendorName) continue;
+          
+          const metaKg = parseFloat(row[c]) || 0;
+          const ejecutadoKg = parseFloat(row[c+1]) || 0;
+          
+          if (metaKg > 0 || ejecutadoKg > 0) {
+            volumenRows.push({
+              sku,
+              articulo,
+              categoria: cat,
+              vendedor_id: vendorName,
+              vendedor_nombre: vendorName,
+              meta_kg: metaKg,
+              ejecutado_kg: ejecutadoKg,
+              zona: "General"
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Extraer compras operativas desde hojas de producto
+    const findSheet = (patterns: string[]) => {
+      const found = workbook.SheetNames.find((n: string) => 
+        patterns.some(p => n.toLowerCase().trim().includes(p.toLowerCase()))
+      );
+      return found ? workbook.Sheets[found] : null;
+    };
+
+    const sAceite = findSheet(['aceite']);
+    const sAzucar = findSheet(['azucar', 'azúcar']);
+    const sPollo = findSheet(['pollo']);
+    const sAsturias = findSheet(['asturias', 'jamon']);
+    const sSalpicao = findSheet(['ligeros', 'salpicao', 'mortadela']);
+
+    const readActiveClients = (sheet: any) => {
+      const clientMap = new Map<string, number>();
+      if (!sheet) return clientMap;
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i] as any[];
+        if (r && r[0] !== undefined && r[0] !== null && String(r[0]).trim() !== '') {
+          const rawCode = String(r[0]).trim();
+          const cleanCode = rawCode.replace(/^0+/, '') || rawCode;
+          const cajas = parseFloat(r[2]) || 0;
+          const addVal = cajas > 0 ? cajas : 1;
+          clientMap.set(rawCode, (clientMap.get(rawCode) || 0) + addVal);
+          if (cleanCode !== rawCode) {
+            clientMap.set(cleanCode, (clientMap.get(cleanCode) || 0) + addVal);
+          }
+        }
+      }
+      return clientMap;
+    };
+
+    const mapAceite = readActiveClients(sAceite);
+    const mapAzucar = readActiveClients(sAzucar);
+    const mapPollo = readActiveClients(sPollo);
+    const mapAsturias = readActiveClients(sAsturias);
+    const mapSalpicao = readActiveClients(sSalpicao);
+
+    // 3. Sincronizar volumen en Supabase
     try {
-      const workbook = await getWorkbook(req.query.force === 'true');
-const XLSX = await import('xlsx');
+      if (volumenRows.length > 0) {
+        await supabase.from('ventas_volumen').delete().eq('periodo', '2026-10');
+        for (let i = 0; i < volumenRows.length; i += 100) {
+          const batch = volumenRows.slice(i, i + 100);
+          await supabase.from('ventas_volumen').insert(batch);
+        }
+      }
+    } catch (vErr: any) {
+      console.warn("[SERVER] Error sincronizando ventas_volumen:", vErr?.message);
+    }
+
+    // 4. Sincronizar compras en activacion_clientes de Supabase preservando asignaciones maestras
+    let allClients: any[] = [];
+    try {
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from('activacion_clientes')
+          .select('*')
+          .order('id')
+          .range(from, from + 999);
+        if (error || !data || data.length === 0) break;
+        allClients.push(...data);
+        if (data.length < 1000) break;
+        from += 1000;
+      }
+
+      if (allClients.length > 0) {
+        const updateBatch: any[] = [];
+        for (const c of allClients) {
+          const cod = String(c.cliente_codigo).trim();
+          const cleanCod = cod.replace(/^0+/, '') || cod;
+
+          const cAceite = mapAceite.get(cod) || mapAceite.get(cleanCod) || 0;
+          const cAzucar = mapAzucar.get(cod) || mapAzucar.get(cleanCod) || 0;
+          const cPollo = mapPollo.get(cod) || mapPollo.get(cleanCod) || 0;
+          const cAsturias = mapAsturias.get(cod) || mapAsturias.get(cleanCod) || 0;
+          const cSalpicao = mapSalpicao.get(cod) || mapSalpicao.get(cleanCod) || 0;
+
+          const hasAceite = cAceite > 0;
+          const hasAzucar = cAzucar > 0;
+          const hasPollo = cPollo > 0;
+          const hasAsturias = cAsturias > 0;
+          const hasSalpicao = cSalpicao > 0;
+          const isActivo = hasAceite || hasAzucar || hasPollo || hasAsturias || hasSalpicao;
+
+          updateBatch.push({
+            id: c.id,
+            periodo: '2026-10',
+            cliente_codigo: c.cliente_codigo,
+            cliente_nombre: c.cliente_nombre,
+            vendedor_id: c.vendedor_id,
+            vendedor_nombre: c.vendedor_nombre,
+            status: isActivo ? 'ACTIVO' : 'INACTIVO',
+            cajas_aceite: cAceite,
+            cajas_azucar: cAzucar,
+            cajas_pollo: cPollo,
+            cajas_estandar_asturias: cAsturias,
+            cajas_mortadela_salpicao: cSalpicao,
+            has_aceite: hasAceite,
+            has_azucar: hasAzucar,
+            has_pollo: hasPollo,
+            has_estandar_asturias: hasAsturias,
+            has_mortadela_salpicao: hasSalpicao
+          });
+        }
+
+        for (let i = 0; i < updateBatch.length; i += 100) {
+          const batch = updateBatch.slice(i, i + 100);
+          await supabase.from('activacion_clientes').upsert(batch, { onConflict: 'id' });
+        }
+      }
+    } catch (cErr: any) {
+      console.warn("[SERVER] Error sincronizando activacion_clientes:", cErr?.message);
+    }
+
+    return {
+      countVolumen: volumenRows.length,
+      countActivacion: allClients.length
+    };
+  }
+
+  // ENDPOINT DE SINCRONIZACIÓN BAJO DEMANDA DESDE GOOGLE SHEETS
+  app.post("/api/sync/sheets", authenticateToken, requireAdmin, async (req: any, res: any) => {
+    try {
+      console.log("[SERVER] Sincronizando datos en vivo desde Google Sheets...");
+      const workbook = await getWorkbook(true);
+
+      // Limpiar caches en memoria
+      cachedWorkbook = null;
+      cachedVolumenParsed = null;
+      cachedActivacionParsed = null;
+      cachedMetasParsed = null;
+
+      const result = await syncWorkbookToSupabase(workbook);
+
+      res.json({
+        success: true,
+        message: "Sincronización con Google Sheets y Supabase completada con éxito",
+        countVolumen: result.countVolumen,
+        countActivacion: result.countActivacion,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error("[SERVER] Error en /api/sync/sheets:", err);
+      res.status(500).json({ success: false, error: "Error sincronizando datos de Google Sheets", details: err?.message });
+    }
+  });
+
+  // ==============================================================
+  // HISTORIAL DE VENTAS (tabla ventas_historial + vistas hist_*)
+  // Solo lectura. Protegido con JWT; el alcance por vendedor se decide AQUÍ (nunca en el navegador).
+  // ==============================================================
+  const normHist = (s: any) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  const histFail = (res: any, e: any) => {
+    const msg = String(e?.message || e || '');
+    if (/does not exist|schema cache|Could not find the (table|relation)/i.test(msg)) {
+      return res.status(503).json({ error: 'El historial aún no está instalado en Supabase (ejecutar scripts/sql/ventas_historial.sql y cargar el CSV).', code: 'NOT_INSTALLED' });
+    }
+    console.error('[HISTORIAL]', msg);
+    return res.status(500).json({ error: 'Error consultando el historial', details: msg });
+  };
+
+  // Pagina de 1000 en 1000 (límite de PostgREST). `build` debe incluir order() para paginar de forma estable.
+  async function histFetchAll(build: (from: number, to: number) => any): Promise<any[]> {
+    const out: any[] = [];
+    for (let from = 0; from < 300000; from += 1000) {
+      const { data, error } = await build(from, from + 999);
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) break;
+      out.push(...data);
+      if (data.length < 1000) break;
+    }
+    return out;
+  }
+
+  let histVendorsCache: { names: string[]; time: number } | null = null;
+  async function histGetVendorNames(): Promise<string[]> {
+    if (histVendorsCache && Date.now() - histVendorsCache.time < 300000) return histVendorsCache.names;
+    const rows = await histFetchAll((a, b) => supabase!.from('hist_vendedores').select('vendedor').order('vendedor').range(a, b));
+    const names = rows.map(r => String(r.vendedor || '')).filter(Boolean);
+    histVendorsCache = { names, time: Date.now() };
+    return names;
+  }
+
+  // Devuelve los nombres de vendedor que el usuario autenticado puede ver.
+  // ADMIN: todo o la ruta pedida. VENDEDOR: únicamente sus propias rutas (ignora cualquier otro valor).
+  async function histResolveScope(req: any): Promise<{ all: boolean; names: string[] }> {
+    const user = req.user || {};
+    const role = String(user.role || '').toUpperCase();
+    const q = String(req.query.vendedor || '').trim();
+    const qU = q.toUpperCase();
+    const known = await histGetVendorNames();
+    const toNames = (aliases: string[]) => {
+      const set = new Set(aliases.map(normHist));
+      return known.filter(n => set.has(normHist(n)));
+    };
+    const findRoute = (id: string) => {
+      for (const p of Object.values(VENDOR_PROFILES)) {
+        const r = p.routes.find(r => r.id === id || r.aliases.some(a => normHist(a) === normHist(id)));
+        if (r) return r;
+      }
+      return null;
+    };
+
+    if (role === 'ADMIN') {
+      if (!q || qU === 'ADMIN' || qU === 'TODOS' || qU === 'TODOS LOS VENDEDORES') return { all: true, names: [] };
+      if (qU.startsWith('CONSOLIDATED:')) {
+        const prof = getVendorProfile(q.slice('CONSOLIDATED:'.length));
+        return { all: false, names: toNames(prof.routes.flatMap(r => r.aliases)) };
+      }
+      const r = findRoute(q);
+      return { all: false, names: toNames(r ? r.aliases : [q]) };
+    }
+
+    const profile = getVendorProfile(String(user.username || ''));
+    let routes = profile.routes;
+    if (q && qU !== 'ALL_MY_ROUTES') {
+      const mine = routes.find(r => r.id === q || r.aliases.some(a => normHist(a) === normHist(q)));
+      if (mine) routes = [mine];
+    }
+    return { all: false, names: toNames(routes.flatMap(r => r.aliases)) };
+  }
+
+  const histCache = new Map<string, { time: number; data: any }>();
+  const histCached = async <T,>(key: string, loader: () => Promise<T>): Promise<T> => {
+    const hit = histCache.get(key);
+    if (hit && Date.now() - hit.time < 300000) return hit.data as T;
+    const data = await loader();
+    if (histCache.size > 60) histCache.clear();
+    histCache.set(key, { time: Date.now(), data });
+    return data;
+  };
+  const scopeKey = (s: { all: boolean; names: string[] }) => (s.all ? 'ALL' : [...s.names].sort().join('|'));
+  const nz = (v: any) => Number(v) || 0;
+
+  async function histLoadVolumen(scope: { all: boolean; names: string[] }) {
+    return histCached('vol:' + scopeKey(scope), async () => {
+      const merged = new Map<string, any>();
+      const add = (r: any) => {
+        const k = `${r.ano}|${r.mes}|${r.id_articulo}`;
+        let m = merged.get(k);
+        if (!m) { m = { ano: r.ano, mes: r.mes, sku: r.id_articulo, articulo: r.articulo, rubro: r.rubro, cajas: 0, unidades: 0, kgs: 0, monto: 0, clientes: 0 }; merged.set(k, m); }
+        m.cajas += nz(r.cajas); m.unidades += nz(r.unidades); m.kgs += nz(r.kgs); m.monto += nz(r.monto); m.clientes += nz(r.clientes);
+      };
+      if (scope.all) {
+        const rows = await histFetchAll((a, b) => supabase!.from('hist_volumen_total_mes').select('*').order('ano').order('mes').order('id_articulo').range(a, b));
+        rows.forEach(add);
+      } else {
+        const rows = await histFetchAll((a, b) => supabase!.from('hist_volumen_mes').select('*').in('vendedor', scope.names).order('ano').order('mes').order('vendedor').order('id_articulo').range(a, b));
+        rows.forEach(add);
+      }
+      return [...merged.values()].map(r => ({ ...r, cajas: +r.cajas.toFixed(2), unidades: +r.unidades.toFixed(2), kgs: +r.kgs.toFixed(2), monto: +r.monto.toFixed(2) }));
+    });
+  }
+
+  app.get('/api/historial/meta', authenticateToken, async (req: any, res: any) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: 'Supabase no configurado' });
+      const periodos = await histCached('periodos', () =>
+        histFetchAll((a, b) => supabase!.from('hist_periodos').select('ano,mes').order('ano').order('mes').range(a, b)));
+      res.json({ periodos });
+    } catch (e) { histFail(res, e); }
+  });
+
+  app.get('/api/historial/volumen', authenticateToken, async (req: any, res: any) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: 'Supabase no configurado' });
+      const scope = await histResolveScope(req);
+      if (!scope.all && scope.names.length === 0) return res.json({ rows: [] });
+      res.json({ rows: await histLoadVolumen(scope) });
+    } catch (e) { histFail(res, e); }
+  });
+
+  app.get('/api/historial/rubros', authenticateToken, async (req: any, res: any) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: 'Supabase no configurado' });
+      const scope = await histResolveScope(req);
+      if (!scope.all && scope.names.length === 0) return res.json({ meses: [], cartera: 0 });
+
+      const result = await histCached('rub:' + scopeKey(scope), async () => {
+        const vol = await histLoadVolumen(scope);
+        const meses = new Map<string, any>();
+        const mesRow = (ano: number, mes: number) => {
+          const k = `${ano}|${mes}`;
+          let m = meses.get(k);
+          if (!m) { m = { ano, mes, kgs: {} as Record<string, number>, cajas: {} as Record<string, number>, monto: {} as Record<string, number>, activos: { ACEITE: 0, AZUCAR: 0, POLLO: 0, ESTANDAR_ASTURIAS: 0, MORTADELA_SALPICAO: 0, TOTAL: 0 }, clientesConMovimiento: 0, fueraCartera: 0 }; meses.set(k, m); }
+          return m;
+        };
+        vol.forEach((r: any) => {
+          const m = mesRow(r.ano, r.mes);
+          m.kgs[r.rubro] = (m.kgs[r.rubro] || 0) + r.kgs;
+          m.cajas[r.rubro] = (m.cajas[r.rubro] || 0) + r.cajas;
+          m.monto[r.rubro] = (m.monto[r.rubro] || 0) + r.monto;
+        });
+
+        const resumen = await histFetchAll((a, b) => {
+          let q = supabase!.from('hist_activacion_resumen_mes').select('*');
+          if (!scope.all) q = q.in('vendedor', scope.names);
+          return q.order('ano').order('mes').order('vendedor').range(a, b);
+        });
+        resumen.forEach((r: any) => {
+          const m = mesRow(r.ano, r.mes);
+          m.activos.ACEITE += nz(r.act_aceite);
+          m.activos.AZUCAR += nz(r.act_azucar);
+          m.activos.POLLO += nz(r.act_pollo);
+          m.activos.ESTANDAR_ASTURIAS += nz(r.act_estandar_asturias);
+          m.activos.MORTADELA_SALPICAO += nz(r.act_mortadela_salpicao);
+          m.activos.TOTAL += nz(r.act_total);
+          m.clientesConMovimiento += nz(r.clientes_con_movimiento);
+          m.fueraCartera += nz(r.clientes_fuera_cartera);
+        });
+
+        // Tamaño de la cartera actual (base del % de activación)
+        const cart = await histFetchAll((a, b) => supabase!.from('activacion_clientes').select('cliente_codigo,vendedor_nombre').order('id').range(a, b));
+        const allowed = new Set(scope.names.map(normHist));
+        const seen = new Set<string>();
+        cart.forEach((c: any) => {
+          if (!scope.all && !allowed.has(normHist(c.vendedor_nombre))) return;
+          seen.add(String(c.cliente_codigo || '').replace(/^0+/, ''));
+        });
+
+        return {
+          meses: [...meses.values()].sort((a, b) => a.ano - b.ano || a.mes - b.mes),
+          cartera: seen.size
+        };
+      });
+      res.json(result);
+    } catch (e) { histFail(res, e); }
+  });
+
+  app.get('/api/historial/clientes', authenticateToken, async (req: any, res: any) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: 'Supabase no configurado' });
+      const ano = parseInt(String(req.query.ano), 10);
+      const mes = parseInt(String(req.query.mes), 10);
+      if (!ano || !mes || mes < 1 || mes > 12) return res.status(400).json({ error: 'ano y mes son requeridos' });
+      const scope = await histResolveScope(req);
+      if (!scope.all && scope.names.length === 0) return res.json({ rows: [] });
+
+      const rows = await histCached(`cli:${ano}:${mes}:${scopeKey(scope)}`, async () => {
+        const data = await histFetchAll((a, b) => {
+          let q = supabase!.from('hist_activacion_cliente_mes').select('*').eq('ano', ano).eq('mes', mes);
+          if (!scope.all) q = q.in('vendedor', scope.names);
+          return q.order('id_cliente').range(a, b);
+        });
+        return data.map((r: any) => ({
+          id: r.id_cliente,
+          cliente: r.cliente,
+          vendedor: r.vendedor,
+          enCartera: !!r.en_cartera,
+          cajas: {
+            ACEITE: nz(r.cajas_aceite),
+            AZUCAR: nz(r.cajas_azucar),
+            POLLO: nz(r.cajas_pollo),
+            ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias),
+            MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao)
+          },
+          kgs: nz(r.kgs),
+          monto: nz(r.monto)
+        }));
+      });
+      res.json({ rows });
+    } catch (e) { histFail(res, e); }
+  });
+
+  app.get('/api/historial/cliente/:id', authenticateToken, async (req: any, res: any) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: 'Supabase no configurado' });
+      const id = String(req.params.id || '').trim().replace(/^0+/, '');
+      if (!/^[A-Za-z0-9._-]{1,24}$/.test(id)) return res.status(400).json({ error: 'Código de cliente inválido' });
+      const scope = await histResolveScope(req);
+      if (!scope.all && scope.names.length === 0) return res.status(404).json({ error: 'Sin acceso' });
+
+      const meses = await histFetchAll((a, b) => {
+        let q = supabase!.from('hist_activacion_cliente_mes').select('*').eq('id_cliente', id);
+        if (!scope.all) q = q.in('vendedor', scope.names);
+        return q.order('ano').order('mes').range(a, b);
+      });
+      // Si el cliente no pertenece al alcance del usuario no se devuelve nada (ni sus productos).
+      if (meses.length === 0) return res.json({ meses: [], productos: [] });
+
+      const prods = await histFetchAll((a, b) =>
+        supabase!.from('ventas_historial').select('ano,mes,id_articulo,articulo,rubro,cajas,kgs,monto').eq('id_cliente', id).order('ano').order('mes').order('id_articulo').range(a, b));
+      const pm = new Map<string, any>();
+      prods.forEach((r: any) => {
+        const k = `${r.ano}|${r.mes}|${r.id_articulo}`;
+        let m = pm.get(k);
+        if (!m) { m = { ano: r.ano, mes: r.mes, sku: r.id_articulo, articulo: r.articulo, rubro: r.rubro, cajas: 0, kgs: 0, monto: 0 }; pm.set(k, m); }
+        m.cajas += nz(r.cajas); m.kgs += nz(r.kgs); m.monto += nz(r.monto);
+      });
+
+      res.json({
+        meses: meses.map((r: any) => ({
+          ano: r.ano, mes: r.mes, cliente: r.cliente, vendedor: r.vendedor,
+          cajas: { ACEITE: nz(r.cajas_aceite), AZUCAR: nz(r.cajas_azucar), POLLO: nz(r.cajas_pollo), ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias), MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao) },
+          kgs: nz(r.kgs), monto: nz(r.monto)
+        })),
+        productos: [...pm.values()].map(p => ({ ...p, cajas: +p.cajas.toFixed(2), kgs: +p.kgs.toFixed(2), monto: +p.monto.toFixed(2) }))
+      });
+    } catch (e) { histFail(res, e); }
+  });
+
+  let cachedVolumenParsed: any[] | null = null;
+  let lastVolumenParsedTime = 0;
+  let cachedActivacionParsed: any[] | null = null;
+  let lastActivacionParsedTime = 0;
+  let cachedMetasParsed: any[] | null = null;
+  let lastMetasParsedTime = 0;
+  const PARSED_DATA_TTL = 30000; // 30 seconds
+
+  app.get("/api/data/volumen", authenticateToken, async (req: any, res: any) => {
+    try {
+      const user = req.user;
+      const force = req.query.force === 'true';
+      let vendorFilter: string | null = null;
+      let allowedAliases: string[] = [];
+
+      if (user.role === 'VENDEDOR') {
+        const prof = getVendorProfile(user.username || '');
+        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        vendorFilter = (user.username || '').toUpperCase().trim();
+      } else if (req.query.vendedor) {
+        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
+        if (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS') {
+          const prof = getVendorProfile(vendorFilter);
+          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        }
+      }
+
+      const filterByVendor = (list: any[]) => {
+        if (!vendorFilter || vendorFilter === 'ADMIN' || vendorFilter === 'TODOS') return list;
+        return list.filter(d => {
+          const vNombre = (d.vendedorNombre || '').toUpperCase();
+          const vId = (d.vendedorId || '').toUpperCase();
+          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+            if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
+          }
+          return allowedAliases.some(a => {
+            const aU = a.toUpperCase();
+            return vNombre.includes(aU) || vId.includes(aU) || aU.includes(vNombre) || aU.includes(vId);
+          });
+        });
+      };
+
+      if (!force && supabase) {
+        try {
+          const searchTerms = (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS')
+            ? Array.from(new Set([vendorFilter, ...allowedAliases]))
+                .filter(Boolean)
+                .map(t => t.trim())
+                .filter(t => t.length > 0 && !/^\d+$/.test(t))
+            : [];
+          const orClauses = searchTerms.flatMap(t => [
+            `vendedor_nombre.ilike.%${t}%`,
+            `vendedor_id.ilike.%${t}%`
+          ]).join(',');
+
+          let supaRows: any[] = [];
+          let from = 0;
+          const pageSize = 1000;
+          while (from < 10000) {
+            let q = supabase.from('ventas_volumen').select('*').range(from, from + pageSize - 1);
+            if (orClauses) q = q.or(orClauses);
+            const { data, error } = await q;
+            if (error || !data || data.length === 0) break;
+            supaRows.push(...data);
+            if (data.length < pageSize) break;
+            from += pageSize;
+          }
+          if (Array.isArray(supaRows) && supaRows.length > 0) {
+            const mapped = supaRows.map(r => {
+              const metaKg = Number(r.meta_kg) || 0;
+              const ejecutadoKg = Number(r.ejecutado_kg) || 0;
+              return {
+                id: String(r.id),
+                sku: r.sku,
+                skuId: r.sku,
+                articulo: r.articulo,
+                categoria: r.categoria,
+                vendedorId: r.vendedor_id,
+                vendedorNombre: r.vendedor_nombre,
+                vendedorEmail: undefined,
+                cliente: r.vendedor_nombre || 'General',
+                meta: metaKg,
+                metaKg: metaKg,
+                ejecutado: ejecutadoKg,
+                ejecutadoKg: ejecutadoKg,
+                zona: r.zona || 'General'
+              };
+            });
+            return res.json(mapped);
+          }
+        } catch (e) {}
+      }
+
+      if (!force && cachedVolumenParsed && (Date.now() - lastVolumenParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedVolumenParsed));
+      }
+
+      const workbook = await getWorkbook(force);
+      const XLSX = await import('xlsx');
 
       let volumenData: any[] = [];
       let idCounter = 1;
@@ -1501,12 +2940,15 @@ const XLSX = await import('xlsx');
                 vendedorId: finalVendedorId,
                 vendedorNombre: finalVendedorNombre,
                 vendedorEmail: finalVendedorEmail,
+                sku: sku,
                 skuId: sku,
                 articulo: articulo,
                 cliente: finalVendedorNombre,
                 categoria: cat,
                 meta: metaKg,
+                metaKg: metaKg,
                 ejecutado: ejecutadoKg,
+                ejecutadoKg: ejecutadoKg,
                 zona: "General",
                 lat: 10.6427, 
                 lng: -71.6125
@@ -1515,19 +2957,107 @@ const XLSX = await import('xlsx');
           }
         }
       }
-      res.json(volumenData);
+
+      cachedVolumenParsed = volumenData;
+      lastVolumenParsedTime = Date.now();
+      res.json(filterByVendor(volumenData));
     } catch (err: any) {
       console.error("Error parsing volume data:", err);
       res.status(500).json([]);
     }
   });
 
-  
-
-  
-  app.get("/api/data/activacion", async (req, res) => {
+  app.get("/api/data/activacion", authenticateToken, async (req: any, res: any) => {
     try {
-      const workbook = await getWorkbook(req.query.force === 'true');
+      const user = req.user;
+      const force = req.query.force === 'true';
+      let vendorFilter: string | null = null;
+      let allowedAliases: string[] = [];
+
+      if (user.role === 'VENDEDOR') {
+        const prof = getVendorProfile(user.username || '');
+        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        vendorFilter = (user.username || '').toUpperCase().trim();
+      } else if (req.query.vendedor) {
+        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
+        if (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS') {
+          const prof = getVendorProfile(vendorFilter);
+          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        }
+      }
+
+      const filterByVendor = (list: any[]) => {
+        if (!vendorFilter || vendorFilter === 'ADMIN' || vendorFilter === 'TODOS') return list;
+        return list.filter(d => {
+          const vNombre = (d.vendedorNombre || '').toUpperCase();
+          const vId = (d.vendedorId || '').toUpperCase();
+          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+            if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
+          }
+          return allowedAliases.some(a => {
+            const aU = a.toUpperCase();
+            return vNombre.includes(aU) || vId.includes(aU) || aU.includes(vNombre) || aU.includes(vId);
+          });
+        });
+      };
+
+      if (!force && supabase) {
+        try {
+          const searchTerms = (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS')
+            ? Array.from(new Set([vendorFilter, ...allowedAliases]))
+                .filter(Boolean)
+                .map(t => t.trim())
+                .filter(t => t.length > 0 && !/^\d+$/.test(t))
+            : [];
+          const orClauses = searchTerms.flatMap(t => [
+            `vendedor_nombre.ilike.%${t}%`,
+            `vendedor_id.ilike.%${t}%`
+          ]).join(',');
+
+          let supaRows: any[] = [];
+          let from = 0;
+          const pageSize = 1000;
+          while (from < 10000) {
+            let q = supabase.from('activacion_clientes').select('*').range(from, from + pageSize - 1);
+            if (orClauses) q = q.or(orClauses);
+            const { data, error } = await q;
+            if (error || !data || data.length === 0) break;
+            supaRows.push(...data);
+            if (data.length < pageSize) break;
+            from += pageSize;
+          }
+          if (Array.isArray(supaRows) && supaRows.length > 0) {
+            const mapped = supaRows.map(r => ({
+              id: r.cliente_codigo,
+              cliente: r.cliente_nombre,
+              vendedorId: r.vendedor_id,
+              vendedorNombre: r.vendedor_nombre,
+              status: r.status,
+              cajas: {
+                ACEITE: Number(r.cajas_aceite) || 0,
+                AZUCAR: Number(r.cajas_azucar) || 0,
+                POLLO: Number(r.cajas_pollo) || 0,
+                ESTANDAR_ASTURIAS: Number(r.cajas_estandar_asturias) || 0,
+                MORTADELA_SALPICAO: Number(r.cajas_mortadela_salpicao) || 0
+              },
+              cats: {
+                ACEITE: Boolean(r.has_aceite),
+                AZUCAR: Boolean(r.has_azucar),
+                POLLO: Boolean(r.has_pollo),
+                ESTANDAR_ASTURIAS: Boolean(r.has_estandar_asturias),
+                MORTADELA_SALPICAO: Boolean(r.has_mortadela_salpicao)
+              }
+            }));
+            return res.json(mapped);
+          }
+        } catch (e) {}
+      }
+
+      if (!force && cachedActivacionParsed && (Date.now() - lastActivacionParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedActivacionParsed));
+      }
+
+      const workbook = await getWorkbook(force);
       const XLSX = await import('xlsx');
 
       const findSheet = (patterns: string[]) => {
@@ -1604,7 +3134,6 @@ const XLSX = await import('xlsx');
               POLLO: hasPollo ? 1 : 0,
               ESTANDAR_ASTURIAS: hasAsturias ? 1 : 0,
               MORTADELA_SALPICAO: hasSalpicao ? 1 : 0,
-              // Aliases para retrocompatibilidad
               ARROZ: hasPollo ? 1 : 0,
               ENTERO: hasAsturias ? 1 : 0,
               LIGEROS: hasSalpicao ? 1 : 0,
@@ -1620,16 +3149,36 @@ const XLSX = await import('xlsx');
         }
       }
 
-      res.json(activacionData);
+      cachedActivacionParsed = activacionData;
+      lastActivacionParsedTime = Date.now();
+      res.json(filterByVendor(activacionData));
     } catch (err) {
       console.error("Error in /api/data/activacion:", err);
       res.status(500).json([]);
     }
   });
 
-  app.get("/api/data/metas-activacion", async (req, res) => {
+  app.get("/api/data/metas-activacion", authenticateToken, async (req: any, res: any) => {
     try {
-      const workbook = await getWorkbook(req.query.force === 'true');
+      const user = req.user;
+      const force = req.query.force === 'true';
+      let vendorFilter: string | null = null;
+      if (user.role === 'VENDEDOR') {
+        vendorFilter = (user.vendorId || user.username || '').toUpperCase().trim();
+      } else if (req.query.vendedor) {
+        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
+      }
+
+      const filterByVendor = (list: any[]) => {
+        if (!vendorFilter || vendorFilter === 'ADMIN' || vendorFilter === 'TODOS') return list;
+        return list.filter(d => (d.vendedorId || '').toUpperCase().includes(vendorFilter));
+      };
+
+      if (!force && cachedMetasParsed && (Date.now() - lastMetasParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedMetasParsed));
+      }
+
+      const workbook = await getWorkbook(force);
       const XLSX = await import('xlsx');
 
       let metasData: any[] = [];
@@ -1657,248 +3206,13 @@ const XLSX = await import('xlsx');
           });
         }
       }
-      res.json(metasData);
+
+      cachedMetasParsed = metasData;
+      lastMetasParsedTime = Date.now();
+      res.json(filterByVendor(metasData));
     } catch(err) {
       console.error("Error in /api/data/metas-activacion:", err);
       res.status(500).json([]);
-    }
-  });
-
-// Assistant Chat API
-  app.post("/api/chat", async (req, res) => {
-    try {
-      const { messages, vendedorName, activeTab, contextData } = req.body;
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
-      let contextInfo = "";
-      if (activeTab === 'ACTIVACION_RUBRO') contextInfo = "El vendedor está viendo el módulo de 'Activación por Rubro'. Explícale que aquí puede ver los 5 productos clave del mes (Aceite, Azúcar, Pollo, Estándar y Superior Asturias, Mortadela Salpicao y Asturias) y su avance de metas.";
-      else if (activeTab === 'VOLUMEN') contextInfo = "El vendedor está viendo el módulo de 'Volumen (SKU/KG)'. Explícale que aquí puede revisar la cantidad de kilos físicos que ha vendido desglosado por artículo.";
-      else if (activeTab === 'ACTIVACION_CLIENTES') contextInfo = "El vendedor está viendo el módulo de 'Activación de Clientes'. Indícale que en esta pestaña puede ver la lista de sus clientes con los 5 productos clave del mes (Aceite, Azúcar, Pollo, Estándar y Superior Asturias, Mortadela Salpicao y Asturias).";
-      else if (activeTab === 'COBROS_OCR') contextInfo = "El vendedor está viendo el módulo de 'Cobros (OCR)'. Explícale que aquí puede subir fotos de comprobantes de pago (transferencias, billetes) para que el sistema extraiga los datos automáticamente y registre el cobro.";
-      else if (activeTab === 'DEGUSTACIONES') contextInfo = "El usuario está en el módulo de 'Degustaciones' / 'Trade Marketing'. Aquí puede consultar el calendario de disponibilidad, ver los horarios disponibles (9 en la mañana y 9 en la tarde), cargar solicitudes para clientes de su cartera y dar seguimiento al estado de aprobación y promotoras asignadas.";
-
-      const systemInstruction = `Eres 'CodiBot', un asistente inteligente para el Dashboard de Fuerza de Ventas de Codizulca.
-El vendedor actual que te está hablando es: ${vendedorName || 'Un vendedor del equipo'}.
-CONTEXTO ACTUAL: ${contextInfo || 'El vendedor está en el dashboard general.'}
-DATOS DE ESTA PESTAÑA PARA RESPONDER PREGUNTAS EXACTAS (Usa estos datos reales si te preguntan cuántos clientes tienen, faltan, volúmenes o degustaciones):
-${contextData || 'No hay datos provistos.'}
-
-Esta aplicación tiene 5 módulos principales:
-1. VOLUMEN: Muestra el % de cumplimiento de ventas físicas en Kilogramos y Cajas desglosado por artículo (SKU).
-2. ACTIVACIÓN POR RUBRO: Muestra si el vendedor está logrando colocar los 5 productos clave del mes (Aceite, Azúcar, Pollo, Estándar y Superior Asturias, Mortadela Salpicao y Asturias) en su cartera de clientes.
-3. ACTIVACIÓN POR CLIENTES: Muestra la lista detallada de la cartera de clientes y cuáles de los 5 productos ha comprado cada uno para llegar al 100%.
-4. COBROS (Lector OCR): Permite al vendedor tomar fotos de transferencias y billetes para registrar pagos y emitir recibos.
-5. DEGUSTACIONES: Gestión integral de degustaciones e impulsaciones de producto en puntos de venta para clientes. Cuenta con 3 secciones: 1. Agendar, 2. Disponibilidad, 3. Historial y Seguimiento.
-
-CONOCIMIENTO DETALLADO DEL MÓDULO DE DEGUSTACIONES (Debes dominarlo y explicarlo con exactitud):
-- DÍAS HABILITADOS: El calendario ÚNICAMENTE habilita los días JUEVES, VIERNES Y SÁBADOS de cada semana para realizar degustaciones. Los días domingo, lunes, martes y miércoles permanecen deshabilitados.
-- LÍMITE POR VENDEDOR: Cada vendedor puede cargar un MÁXIMO DE 5 DEGUSTACIONES POR SEMANA.
-- CAPACIDAD DIARIA DE LA EMPRESA: Se pueden programar exactamente 18 degustaciones por día habilitado en total para toda la empresa:
-  * 9 DEGUSTACIONES EN LA MAÑANA (Turno Mañana: Horario base de 9:00 AM a 1:00 PM, totalmente modificable según necesidad del punto de venta).
-  * 9 DEGUSTACIONES EN LA TARDE (Turno Tarde: Horario base de 2:00 PM a 7:00 PM, totalmente modificable según necesidad del punto de venta).
-- ANTICIPACIÓN REQUERIDA: Mínimo 2 días hábiles de anticipación para coordinar promotoras, producto e inventario.
-- ESTRUCTURA DE PESTAÑAS DEL MÓDULO:
-  1. AGENDAR: Formulario de reserva con selección de cliente asignado, fecha habilitada, turno/hora, catálogo de productos (Salpicao, Asturias, Alimex), kilos, personas estimadas, promotoras, material POP y contacto de tienda.
-  2. DISPONIBILIDAD: Calendario interactivo mensual donde se visualizan los días Jueves, Viernes y Sábados con sus 18 bloques horarios disponibles en vivo.
-  3. HISTORIAL Y SEGUIMIENTO: Panel donde el vendedor hace seguimiento en tiempo real al estado de sus degustaciones agendadas (Solicitadas, Aprobadas, Realizadas, Rechazadas), con promotoras asignadas, material POP, notas de Trade Marketing y resultados de ventas.
-- SEGUIMIENTO DE ESTADOS:
-  * SOLICITADA: En revisión por Gerencia de Trade Marketing.
-  * APROBADA: Aprobada con promotora confirmada y material asignado.
-  * REALIZADA: Degustación ejecutada exitosamente con reporte de kilos, personas alcanzadas y ventas.
-  * RECHAZADA / CANCELADA: Con motivo detallado explicativo de gerencia.
-
-INSTRUCCIÓN ESPECIAL DE NAVEGACIÓN:
-Si el usuario menciona que necesita ir, ver, buscar información o abrir cualquiera de estos módulos (ejemplo: "llévame a volumen", "necesito ver mis clientes", "quiero escanear un pago", "abre el modulo de rubros", "quiero programar una degustacion", "ver trademarketing", "cargar degustacion"), DEBES responder incluyendo un COMANDO DE ACCIÓN EXACTO y OCULTO al final de tu mensaje en este formato exacto:
-[[NAVIGATE_TO:VOLUMEN]]
-[[NAVIGATE_TO:ACTIVACION_RUBRO]]
-[[NAVIGATE_TO:ACTIVACION_CLIENTES]]
-[[NAVIGATE_TO:COBROS_OCR]]
-[[NAVIGATE_TO:DEGUSTACIONES]]
-
-REGLAS ESTRICTAS PARA PRODUCCIÓN:
-1. ERES UN ANALISTA DE DATOS Y ASESOR OPERATIVO PARA EL VENDEDOR. Tu objetivo es dar respuestas DETALLADAS, ESPECÍFICAS Y EXACTAS basadas en los datos reales del dashboard.
-2. Si te preguntan sobre el módulo de degustaciones (reglas, cupos, horarios, pasos de carga, promotoras, estados), responde de forma amigable, estructurada y muy clara usando viñetas y negritas para que sea fácil de leer en pantallas de celulares Android e iOS.
-3. NUNCA respondas con generalidades ni mandes al usuario a "ver la tabla". Si hay datos de degustaciones en la pestaña, indícale cuántas tiene solicitadas, aprobadas, realizadas o próximas fechas.
-4. Cuando te pregunten sobre sus métricas de avance de venta (ej. "cómo voy en pollo" o "cuántos clientes he activado"):
-   - Indica la META TOTAL, los ACTIVADOS actualmente y cuántos FALTAN para llegar a la meta.
-   - Usa formato enriquecido (negritas, viñetas) para resaltar los números y que sea fácil de escanear en su teléfono celular.
-5. Si el vendedor pide un dato o acción que corresponde a otra pestaña (ej. "quiero cargar una degustación" o "llévame a clientes"), RESPONDE y NAVEGA AUTOMÁTICAMENTE a la pestaña correcta. Añade OBLIGATORIAMENTE el comando de navegación al final de tu mensaje (ej. [[NAVIGATE_TO:DEGUSTACIONES]]) sin preguntarle si desea ir.
-6. Tono: Mantén un lenguaje profesional, altamente analítico y motivador, orientado al éxito del vendedor.`;
-
-      // Limpiar y estructurar mensajes para la API de Gemini (debe iniciar con user y alternar)
-      let formattedMessages: any[] = [];
-      if (Array.isArray(messages)) {
-        for (const m of messages) {
-          const role = (m.role === 'model' || m.role === 'assistant') ? 'model' : 'user';
-          const text = (m.parts?.[0]?.text || m.text || '').trim();
-          if (!text) continue;
-
-          if (formattedMessages.length === 0 && role === 'model') {
-            formattedMessages.push({ role: 'user', parts: [{ text: 'Hola CodiBot' }] });
-          }
-
-          if (formattedMessages.length > 0 && formattedMessages[formattedMessages.length - 1].role === role) {
-            formattedMessages[formattedMessages.length - 1].parts[0].text += `\n${text}`;
-          } else {
-            formattedMessages.push({ role, parts: [{ text }] });
-          }
-        }
-      }
-      if (formattedMessages.length === 0) {
-        formattedMessages = [{ role: 'user', parts: [{ text: 'Hola' }] }];
-      }
-
-      let response;
-      // Priorizamos gemini-3.1-flash-lite por su latencia ultrarrápida (sub-2s) y fallback a gemini-3.8-flash
-      const modelsToTry = ["gemini-3.1-flash-lite", "gemini-3.8-flash"];
-      
-      for (let attempt = 0; attempt < 2; attempt++) {
-        for (const modelName of modelsToTry) {
-          try {
-            response = await ai.models.generateContent({
-              model: modelName,
-              contents: formattedMessages,
-              config: {
-                 systemInstruction: systemInstruction,
-                 temperature: 0.5
-              }
-            });
-            if (response?.text) break;
-          } catch (err: any) {
-            console.log(`Model ${modelName} attempt ${attempt} notice:`, err.message || err);
-          }
-        }
-        if (response?.text) break;
-        await new Promise(resolve => setTimeout(resolve, 800));
-      }
-
-      if (!response || !response.text) {
-         return res.json({ text: "¡Hola! Estoy listo para apoyarte. ¿En qué módulo o información de ventas o degustaciones te puedo asistir hoy?" });
-      }
-
-      return res.json({ text: response.text });
-    } catch (error: any) {
-      console.error("Chat API error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Assistant STT (Speech to Text) API
-  app.post("/api/transcribe", express.json({limit: '50mb'}), async (req, res) => {
-    try {
-      const { audioBase64 } = req.body;
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
-      const audioPart = {
-        inlineData: {
-          mimeType: "audio/webm",
-          data: audioBase64,
-        },
-      };
-
-      const maxRetries = 3;
-      let attempt = 0;
-      let response;
-
-      while (attempt < maxRetries) {
-        try {
-          response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-lite",
-            contents: { parts: [audioPart, { text: "Transcribe exactamente lo que dice el audio." }] },
-          });
-          break;
-        } catch (err: any) {
-          attempt++;
-          const isUnavailable = err.status === 503 || err.status === "UNAVAILABLE" || err.message?.includes("503") || err.message?.includes("high demand");
-          if (attempt < maxRetries && isUnavailable) {
-             await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-             continue;
-          }
-          throw err;
-        }
-      }
-
-      return res.json({ text: response?.text });
-    } catch (error: any) {
-      console.error("Transcribe API error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Assistant TTS (Text to Speech) API - Optimizado para respuesta de voz ágil e inmediata
-  app.post("/api/tts", async (req, res) => {
-    try {
-      const { text } = req.body;
-      if (!text || typeof text !== 'string') {
-        return res.status(400).json({ error: 'Text is required' });
-      }
-
-      // Limpiar markdown, viñetas y comandos para sintetizar solo lenguaje hablado fluido
-      const cleanText = text
-        .replace(/\[\[NAVIGATE_TO:.*?\]\]/g, '')
-        .replace(/[*#_`~>•-]/g, ' ')
-        .replace(/\b(https?:\/\/\S+)/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      // Tomamos un extracto conciso (primeras 1 o 2 oraciones, max 220 caracteres)
-      // Esto reduce el tiempo de generación a < 1.5 segundos en lugar de 20 segundos
-      let spokenText = cleanText;
-      const firstSentenceMatch = cleanText.match(/^([^.!?]+[.!?])/);
-      if (firstSentenceMatch && firstSentenceMatch[1].length >= 25 && firstSentenceMatch[1].length <= 220) {
-        spokenText = firstSentenceMatch[1];
-      } else if (spokenText.length > 220) {
-        spokenText = spokenText.substring(0, 215) + '...';
-      }
-
-      const { Modality } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-      const maxRetries = 2;
-      let attempt = 0;
-      let response;
-
-      while (attempt < maxRetries) {
-        try {
-          response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-tts-preview",
-            contents: [{ parts: [{ text: spokenText }] }],
-            config: {
-              responseModalities: [Modality.AUDIO],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: 'Kore' },
-                },
-              },
-            },
-          });
-          break; // Success
-        } catch (err: any) {
-          attempt++;
-          if (attempt < maxRetries) {
-             await new Promise(resolve => setTimeout(resolve, 600));
-             continue;
-          }
-          throw err;
-        }
-      }
-
-      const inlineData = response?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      let base64Audio = inlineData?.data;
-      let mimeType = inlineData?.mimeType || 'audio/mp3';
-
-      // Gemini TTS usually returns raw PCM. We need to wrap it in a WAV header for the browser to play it.
-      if (base64Audio) {
-         const pcmBuffer = Buffer.from(base64Audio, 'base64');
-         const wavBuffer = pcmToWav(pcmBuffer, 24000, 1);
-         base64Audio = wavBuffer.toString('base64');
-         mimeType = 'audio/wav';
-      }
-
-      return res.json({ audioBase64: base64Audio, mimeType: mimeType });
-    } catch (error: any) {
-      console.error("TTS API error:", error);
-      return res.status(500).json({ error: error.message });
     }
   });
 
@@ -1931,17 +3245,44 @@ REGLAS ESTRICTAS PARA PRODUCCIÓN:
     }
   }
 
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  const tryListen = (portToTry: number) => {
+    const serverInstance = app.listen(portToTry, "0.0.0.0", () => {
+      console.log(`Server running on port ${portToTry}`);
 
-  server.on('error', (err: any) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[SERVER] Puerto ${PORT} ocupado.`);
-    } else {
-      console.error('[SERVER] Error en servidor HTTP:', err);
-    }
-  });
+      // Auto-sincronización periódica y de inicio desde Google Sheets (1PLzYEe9GG1vHb_wjd7HA93U6UQNtyP-uk8sxVfiN4sg)
+      const runAutoSync = async () => {
+        try {
+          console.log("[SYNC AUTO] Sincronizando datos en vivo desde Google Sheet...");
+          const wb = await getWorkbook(true);
+          cachedWorkbook = wb;
+          cachedVolumenParsed = null;
+          cachedActivacionParsed = null;
+          cachedMetasParsed = null;
+          const res = await syncWorkbookToSupabase(wb);
+          console.log(`[SYNC AUTO] Sincronización exitosa con Google Sheet y Supabase. Volumen: ${res.countVolumen}, Activación: ${res.countActivacion}`);
+        } catch (err: any) {
+          console.warn("[SYNC AUTO] Error en sincronización periódica desde Google Sheet:", err?.message);
+        }
+      };
+
+      // Disparar sincronización 3 segundos después del arranque
+      setTimeout(runAutoSync, 3000);
+      // Mantener sincronizado cada 5 minutos
+      setInterval(runAutoSync, 5 * 60 * 1000);
+    });
+
+    serverInstance.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        const altPort = portToTry === 3000 ? 3005 : portToTry + 1;
+        console.warn(`[SERVER] Puerto ${portToTry} ocupado por otra instancia. Intentando en puerto alternativo ${altPort}...`);
+        tryListen(altPort);
+      } else {
+        console.error('[SERVER] Error en servidor HTTP:', err);
+      }
+    });
+  };
+
+  tryListen(PORT);
 }
 
 startServer().catch((err) => {

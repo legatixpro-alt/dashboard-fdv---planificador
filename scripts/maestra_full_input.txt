@@ -1,0 +1,6 @@
+<USER_REQUEST>
+Esa es la base de datos de clientes actualizado, sincroniza y sustituye la que esta en subase y asigna a cada vendedor los clientes que le fueron asignados, no inventes, no mientas, solo haz el trabajo. 
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-13T14:33:33-04:00.
+</ADDITIONAL_METADATA>

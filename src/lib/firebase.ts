@@ -40,19 +40,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   return errInfo;
 }
 
-// Ensure anonymous auth
-signInAnonymously(auth).catch((err) => {
-  console.warn("Firebase auth note:", err?.message);
-});
-
-// Test connection silently as required by Firestore skill
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firestore client is offline, using cache.");
-    }
-  }
-}
-testConnection();
+// Firebase auth and test connection are disabled as Supabase is the primary database
+// signInAnonymously(auth).catch((err) => { ... });
+// testConnection();

@@ -1,0 +1,20 @@
+Created At: 2026-10-13T14:48:42-04:00
+Completed At: 2026-10-13T14:48:43-04:00
+File Path: `file:///c:/Users/JAVIER%20CASTELLANOS/Downloads/dashboard-fdv---planificador/scripts/maestra_from_full.txt`
+Total Lines: 12
+Total Bytes: 363
+Showing lines 1 to 12
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: Created At: 2026-10-13T12:30:32-04:00
+2: Completed At: 2026-10-13T12:30:52-04:00
+3: 
+4: The command exited with code 0.
+5: Output:
+6: VENDEDOR;COD;CLIENTE
+7: MARIA BRICE�O;000326;SUPERMARKET POPULAR CHINA, C.A.
+8: MARIA BRICE�O;000329;LA NUEVA CARNICERIA MARY LUIS, C.A.
+9: MARIA BRICE�O;000332;MINIMARKET I&F, C.A.
+10: MARIA BRICE�O;000333;COMERCIALIZADORA LA LAGO 2015, C.A.
+11: 
+12: 
+The above content shows the entire, complete file contents of the requested file.

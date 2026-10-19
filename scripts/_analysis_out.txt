@@ -1,0 +1,142 @@
+﻿filas 207577 numeros invalidos 128 [
+  '2026;ENERO;00:00.0;FA;349162;84;COMERCASUR, C.A.                                                                                                                                                                            ',
+  '2026;ENERO;00:00.0;DV;54874;2518;COMERCASUR, C.A.                                                                                                                                                                           ',
+  '2026;ENERO;00:00.0;FA;349507;1093;SUPER POLLITO EXPRESS, C.A.                                                                                                                                                               ',
+  '2026;ENERO;00:00.0;FA;349528;3140;SUPER POLLITO EXPRESS, C.A.                                                                                                                                                               ',
+  '2026;ENERO;00:00.0;FA;349563;3770;SUPER POLLITO EXPRESS, C.A.                                                                                                                                                               '
+]
+formato europeo sospechoso 5214
+cajas=0 & kg>0: 4 | cajas>0 & kg=0: 0
+claves agregadas (ano,mes,cliente,vendedor,articulo): 128569
+clientes distintos: 3224 | con >1 nombre: 2
+articulos con >1 nombre por sku: 1
+kg por categoria {
+  POLLO: 1970141.699999986,
+  'MORTADELA SALPICAO Y ASTURIAS': 2005289.30000002,
+  OTROS: 10145515.39999902,
+  ACEITE: 1315625.3999999336,
+  'ESTANDAR Y SUPERIOR ASTURIAS': 102005.79999999986,
+  'AZ├ÜCAR': 3766357
+}
+
+=== ESTANDAR Y SUPERIOR ASTURIAS
+1461   MORT ESTANDAR ASTURIAS X KG                                  filas   2299 kg 65067
+1463   MORT. SUPERIOR ASTURIAS X KG                                 filas   2408 kg 35737
+1467   FS MORT. ESTANDAR ASTURIAS POR KG                            filas     36 kg 632
+1472   FS MORT SUPERIOR ASTURIAS POR KG                             filas     67 kg 571
+
+=== MORTADELA SALPICAO Y ASTURIAS
+21     MORTADELA ESP D/POLLO CORRAL 1X12UNI                         filas  11115 kg 1151708
+1496   MORTADELA ESP D/POLLO ASTURIAS 10UNDX900GR                   filas   5647 kg 255792
+1519   MORTADELA ESP D/POLLO SALPICAO 10UNDX900GR                   filas   3320 kg 220400
+927    MORTADELA ESP. CARACAS 10X900GRS                             filas   3665 kg 78638
+1464   MORT NAVIDE├æA ASTURIAS XKG                                   filas   3373 kg 72546
+1462   MORT. ESPECIAL COCIDA ASTURIAS X KG                          filas   3458 kg 46281
+1051   MORTADELA ESP. CARACAS 10X500GRS                             filas   3649 kg 38530
+1512   MORT DE PAVO ASTURIAS X KG                                   filas   3079 kg 38181
+1511   MORT. PECHUGA DE POLLO ASTURIAS X KG                         filas   2312 kg 33395
+1242   MORT. CHORIZO ESPECIAL CDZ X KG                              filas   1347 kg 14078
+1563   MORT. ESTANDAR SALPICAO X KG                                 filas    427 kg 12414
+1521   MORT. ECONOM COCIDA ASTURIAS X KG                            filas    633 kg 11041
+1009   MORTADELA ESP. CARACAS 1X10UNID                              filas    354 kg 7567
+1561   MORT. PAVO TIPO SHOULDER ASTURIAS POR KG                     filas    283 kg 6020
+1562   MORT. ESPECIAL COCIDA SALPICAO X KG                          filas    275 kg 4597
+1522   MORT. TIPO AREPERO ASTURIAS X KG                             filas    570 kg 4348
+1413   MORTADELA ESP. DE POLLO CARACAS 1X10UNID                     filas    117 kg 2288
+1257   MORT. DE POLLO ESP. CORRAL 6X2.5KG                           filas    109 kg 2003
+1564   MORTADELA EXTRA ASTURIAS X KG                                filas    334 kg 1919
+1259   MORTADELA T/ESPECIAL MAXI CARACAS 6UNDX3.3KG                 filas    189 kg 1789
+174    MORTADELA TAPARA ALIMEX DE 6X3.5KG                           filas    249 kg 1531
+1423   MORT. CHORIZO PEPPER IBERICO X KG                            filas     48 kg 203
+22     MORTADELA ESP D/POLLO CORRAL 24X500GR                        filas      1 kg 24
+1491   MORT. PAVO AHUMADA SELVA NEGRA X KG                          filas      2 kg 7
+1566   FS MORT. PAVO TIPO SHOULDER ASTURIAS POR KG                  filas      3 kg 5
+1494   MORTADELA ESP D/POLLO LOS LLANOS 10UNDX900GR                 filas    156 kg 0
+1492   MORT. PAVO COCIDA SELVA NEGRA X KG                           filas      1 kg -13
+
+=== ACEITE
+1479   ACEITE DE SOYA DIANA 12X900ML                                filas   2873 kg 500094
+1551   ACEITE VENCAMPO 12X900ML                                     filas   2481 kg 450758
+1542   ACEITE SANTA LUCIA 12X900ML                                  filas    283 kg 168876
+1419   ACEITE DE SOYA DIANA 12X760ML                                filas   1679 kg 122098
+1553   ACEITE DE SOYA A GRANEL                                      filas      4 kg 73800
+
+=== AZ├ÜCAR
+1543   AZUCAR BLANCA VENCAMPO 1X20ND                                filas   3814 kg 1771083
+1507   AZUCAR BLANCA ESPERANZA 1X20ND                               filas   1720 kg 697388
+1571   AZUCAR VENCAMPO 1X20ND                                       filas   2034 kg 616294
+1489   AZUCAR REFINADA D CASTA 1KGX20UND                            filas   1388 kg 350039
+1550   AZUCAR BLANCA VENCAMPO 1X24ND                                filas    372 kg 232679
+1438   AZUCAR DO├æA ALICIA 1X20 UND                                  filas     32 kg 97720
+1248   AZUCAR GLORIA 1X20 UND                                       filas      3 kg 580
+1502   AZUCAR REFINADA KRISTAL 20UND X 1KG                          filas     10 kg 574
+
+=== POLLO
+629    MUSLO CUADRIL DESPRESADO POR KG                              filas  11347 kg 400551
+631    FILET FRESCO DESPRESADO POR KG (E)                           filas   2305 kg 308867
+1276   FILET ESP. MILANESA SUPREMA POR KG                           filas     85 kg 228243
+1428   FILET DE PECHUGA TIPO A CONGELADO POR KG                     filas   7330 kg 227977
+1241   POLLO ENTERO JUAN POLLO POR KG                               filas    961 kg 208603
+630    ALAS DESPRESADAS POR KG                                      filas   7187 kg 163448
+1277   MUSLO ESPECIAL SIN CADERA POR KG                             filas    134 kg 150396
+681    FILET EN BOLSA CONG DESPRESADO POR KG                        filas   3688 kg 110700
+1409   FILET DE PECHUGA LOS LLANOS POR KG                           filas   1549 kg 57303
+870    HIGADO (EMPACADO)                                            filas   1354 kg 41032
+829    FILETE DE PECHUGA PROAGRO A GRANEL 5 KG                      filas   1015 kg 32275
+393    MOLLEJA (EMPACADA)                                           filas    943 kg 15971
+1334   HIGADO (GRANEL) LOS LLANOS                                   filas    142 kg 8717
+9      FILETE DE PECHUGA A GRANEL POR KG                            filas    213 kg 5668
+1326   MOLLEJAS LOS LLANOS POR KG                                   filas     78 kg 3597
+676    FILET DE PECHUGA EN BANDEJA (DE)                             filas     25 kg 1809
+699    MUSLO DESPRESADO EN BANDEJA                                  filas     19 kg 1469
+700    ALAS DESPRESADAS EN BANDEJA                                  filas     17 kg 875
+1429   FILET DE PECHUGA TIPO A  FRESCO POR KG                       filas      9 kg 769
+693    FILET DE MUSLO DESPRESADO POR KG                             filas     31 kg 694
+1503   CHURRASCO DE MUSLO POR KG                                    filas     35 kg 684
+111    MOLLEJAS (GRANEL)                                            filas      6 kg 295
+114    HIGADOS (GRANEL)                                             filas      6 kg 198
+312    CARCAZA C/MUSLO POR KG                                       filas      2 kg 0
+690    MUSLO A GRANEL DESPRESADO                                    filas      2 kg 0
+1292   FILETE DE PECHUGA A GRANEL (LOS LLANOS)                      filas      2 kg 0
+
+=== OTROS (top 40 por kg, para detectar mal clasificados)
+1549   ARROZ  BLANCO VENCAMPO 24X900GR                              kg 2172017
+1342   ARROZ GLORIA PREMIUM 24X900GR                                kg 1057886
+28     HUEVOS DE CONSUMO TUNAL TIPO A 1X12UNI                       kg 981130
+1360   PATATAS FRESCAS MARQUISE 4X2.5KG                             kg 732190
+1548   POLLO KIKI POR KG                                            kg 629929
+1568   POLLO VENCAMPO POR KG                                        kg 590155
+1478   POLLO LLANERITO POR KG                                       kg 589293
+1358   ARROZ ESPERANZA TIPO I 24 X 900 GRS                          kg 443057
+1279   ARROZ GLORIA CLASICO 24X900GR                                kg 372335
+1206   ARROZ GLORIA CLASICO 24X1KG                                  kg 354174
+1343   POLLO ESPECIAL DE 1RA LOS LLANOS (E)                         kg 353466
+8      POLLO EBENEZER POR KG                                        kg 312898
+179    LECHE COMPLETA PURISIMA1X12LTRS                              kg 284104
+180    LECHE DESCREMADA PURISIMA1X12LTS                             kg 182497
+242    LECHE DESLACTOSADA PURISIMA1X12LT                            kg 112288
+922    HUEVOS DE CONSUMO TUNAL TIPO B 1X12UNI                       kg 77522
+1088   CHULETA FRESCA IBERICO POR KG                                kg 77136
+979    HUEVOS DE CONSUMO CLASE A 1X12UNID                           kg 63200
+952    HUEVOS DE CONSUMO CLASE B 1X12 UND                           kg 58676
+1446   CHULETA FRESCA ASTURIAS POR KG                               kg 53342
+1578   ARROZ  BLANCO VENCAMPO 24X1KG                                kg 44184
+1556   LECHE EN POLVO VENCAMPO 10X900GR                             kg 38780
+632    CARCASA DESPRESADA POR KG                                    kg 38765
+130    POLLO CORRAL POR KG                                          kg 37780
+1536   LECHE EN POLVO VENCAMPO 10X1KG                               kg 34981
+1445   TOCINO FRESCO ASTURIAS X KG                                  kg 31398
+1524   POLLO BRASA POR KG                                           kg 30759
+182    NECTAR DE MANZANA EL TUNAL 1X12LTRS                          kg 30485
+171    JAMON COC. SUPERIOR ALIMEX 1X5.9KG                           kg 28950
+183    NECTAR DE PERA EL TUNAL 1X12LTRS                             kg 21768
+993    HUEVOS CONSUMO EXTRA TUNAL 1X12UNI                           kg 21472
+1555   LECHE EN POLVO VENCAMPO 20X400GR                             kg 21342
+46     NUGGETS INSTITUCIONAL CORRAL POR KG                          kg 16816
+172    ESPALDA COCIDA ALIMEX 1X4.6KG                                kg 16494
+469    HUEVOS ESTUCH. PLAST. TUNAL 12 X 30                          kg 16312
+1547   POLLO CONGELADO TIPO II POR KG                               kg 15817
+96     QUESO MOZZARELLA ESPECIAL EL LUCERO (E)                      kg 14460
+340    CHULETA AHUMADA ALIMEX X KG                                  kg 12856
+184    NECTAR DE DURAZNO EL TUNAL 1X12LTRS                          kg 12755
+177    SALCHICHA VIENA ALIMEX 16 X 450 GRS                          kg 12243

@@ -34,8 +34,22 @@ export const RecorridoMes: React.FC<RecorridoMesProps> = ({ onSync, loading }) =
             <p className="text-neutral-500 font-sans text-xs">Seguimiento de días laborables en curso</p>
           </div>
         </div>
-        <div className="flex items-center justify-center gap-2 text-sm font-sans font-medium text-emerald-500/80 bg-emerald-950/20 border border-emerald-900/30 px-4 py-3 min-h-[44px] rounded-lg w-full md:w-auto">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Sincronización Automática
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center justify-center gap-2 text-xs md:text-sm font-sans font-medium text-emerald-400 bg-emerald-950/30 border border-emerald-800/40 px-3.5 py-2.5 rounded-lg">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            <span>Auto-Sync Google Sheets</span>
+          </div>
+          {onSync && (
+            <button
+              onClick={onSync}
+              disabled={loading}
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-neutral-900 hover:bg-neutral-800 text-neutral-200 hover:text-white border border-neutral-700/60 rounded-lg text-xs md:text-sm font-medium transition-all shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+              title="Sincronizar ahora desde Google Sheets"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-red-500 ${loading ? 'animate-spin' : ''}`} />
+              <span>{loading ? 'Sincronizando...' : 'Sincronizar'}</span>
+            </button>
+          )}
         </div>
       </div>
       

@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, Suspense, lazy } from 'react';
 import { Role, VolumenData, ActivacionData } from './types';
-import { fetchVolumenData, fetchActivacionData, fetchMetasActivacion } from './services/googleSheetsService';
+import { fetchVolumenData, fetchActivacionData, fetchMetasActivacion, triggerSheetsSync } from './services/googleSheetsService';
 import { Lock, User as UserIcon, AlertCircle, ShieldCheck } from 'lucide-react';
 import { Target, Package, Users, UserCircle, ScanText, ChevronDown, LogOut, Activity, Route, Sparkles, ShoppingCart } from 'lucide-react';
 import { supabase, hasValidSupabaseConfig } from './lib/supabase';
+import { verifyServerSession, clearAuthSession, saveAuthSession } from './services/authService';
 import { 
   getVendorProfile, 
   getAllowedRoutesForUser, 
@@ -14,15 +15,15 @@ import {
   VendorProfile
 } from './utils/vendorRoutes';
 
-import { RecorridoMes } from './components/RecorridoMes';
-import { ActivacionRubro } from './components/ActivacionRubro';
-import { VolumenTab } from './components/VolumenTab';
-import { ActivacionClientes } from './components/ActivacionClientes';
-import { CobrosOCR } from './components/CobrosOCR';
-import { SalesAssistant } from './components/SalesAssistant';
-import { TrazabilidadTab } from './components/TrazabilidadTab';
-import { DegustacionesTab } from './components/DegustacionesTab';
-import { AlkostoTab } from './components/AlkostoTab';
+const RecorridoMes = lazy(() => import('./components/RecorridoMes').then(m => ({ default: m.RecorridoMes })));
+const ActivacionRubro = lazy(() => import('./components/ActivacionRubro').then(m => ({ default: m.ActivacionRubro })));
+const VolumenTab = lazy(() => import('./components/VolumenTab').then(m => ({ default: m.VolumenTab })));
+const ActivacionClientes = lazy(() => import('./components/ActivacionClientes').then(m => ({ default: m.ActivacionClientes })));
+const HistorialSection = lazy(() => import('./components/HistorialPanel').then(m => ({ default: m.HistorialSection })));
+const CobrosOCR = lazy(() => import('./components/CobrosOCR').then(m => ({ default: m.CobrosOCR })));
+const TrazabilidadTab = lazy(() => import('./components/TrazabilidadTab').then(m => ({ default: m.TrazabilidadTab })));
+const DegustacionesTab = lazy(() => import('./components/DegustacionesTab').then(m => ({ default: m.DegustacionesTab })));
+const AlkostoTab = lazy(() => import('./components/AlkostoTab').then(m => ({ default: m.AlkostoTab })));
 import { subscribeDegustaciones } from './services/degustacionesService';
 import { Degustacion } from './types';
 
@@ -30,13 +31,14 @@ type TabId = 'ACTIVACION_RUBRO' | 'VOLUMEN' | 'ACTIVACION_CLIENTES' | 'COBROS_OC
 
 export default function App() {
   const [userRole, setUserRole] = useState<Role>(() => {
-    return (localStorage.getItem('dashboard_fdv_role') as Role) || 'ADMIN';
+    const saved = localStorage.getItem('dashboard_fdv_role') as Role;
+    return (saved === 'ADMIN' || saved === 'SUPERVISOR') ? saved : 'VENDEDOR';
   });
   const [loggedInVendor, setLoggedInVendor] = useState<string>(() => {
-    return localStorage.getItem('dashboard_fdv_vendor') || 'ADMIN';
+    return localStorage.getItem('dashboard_fdv_vendor') || '';
   });
   const [activeVendedorId, setActiveVendedorId] = useState<string>(() => {
-    return localStorage.getItem('dashboard_fdv_active_route') || 'ADMIN';
+    return localStorage.getItem('dashboard_fdv_active_route') || '';
   });
 
   const [activeTab, setActiveTab] = useState<TabId>('ACTIVACION_RUBRO');
@@ -51,9 +53,40 @@ export default function App() {
   const [authUsuario, setAuthUsuario] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return localStorage.getItem('dashboard_fdv_logged_in') === 'true';
+    return Boolean(localStorage.getItem('dashboard_fdv_token')) && localStorage.getItem('dashboard_fdv_logged_in') === 'true';
   });
   const [loginError, setLoginError] = useState('');
+
+  // Verificación estricta de la sesión criptográfica en el backend
+  useEffect(() => {
+    let isMounted = true;
+    async function checkAuth() {
+      const token = localStorage.getItem('dashboard_fdv_token');
+      if (!token) {
+        handleLogout();
+        return;
+      }
+      const sessionRes = await verifyServerSession();
+      if (!isMounted) return;
+      if (!sessionRes.valid || !sessionRes.user) {
+        handleLogout();
+      } else {
+        setUserRole(sessionRes.user.role);
+        setLoggedInVendor(sessionRes.user.username);
+        if (sessionRes.user.role === 'ADMIN') {
+          setActiveVendedorId(localStorage.getItem('dashboard_fdv_active_route') || 'ADMIN');
+        } else {
+          const profile = getVendorProfile(sessionRes.user.username);
+          const initialRoute = profile.routes.length > 1 ? 'ALL_MY_ROUTES' : (profile.routes[0]?.id || profile.canonicalUsername);
+          setActiveVendedorId(initialRoute);
+        }
+      }
+    }
+    if (isLoggedIn) {
+      checkAuth();
+    }
+    return () => { isMounted = false; };
+  }, [isLoggedIn]);
 
   // Perfil del vendedor logueado (garantiza privacidad total)
   const currentVendorProfile = useMemo(() => {
@@ -98,10 +131,11 @@ export default function App() {
     async function loadData(force = false, showLoader = true) {
       if (showLoader) setLoading(true);
       try {
+        const targetVendor = (userRole === 'ADMIN' && activeVendedorId === 'ADMIN') ? undefined : activeVendedorId;
         const [vol, act, metas] = await Promise.all([
-          fetchVolumenData(force),
-          fetchActivacionData(force),
-          fetchMetasActivacion(force)
+          fetchVolumenData(force, targetVendor),
+          fetchActivacionData(force, targetVendor),
+          fetchMetasActivacion(force, targetVendor)
         ]);
         if (isMounted) {
           setVolumenData(vol);
@@ -115,7 +149,17 @@ export default function App() {
       }
     }
 
-    (window as any).refreshData = () => loadData(true, true);
+    (window as any).refreshData = async () => {
+      setLoading(true);
+      try {
+        if (userRole === 'ADMIN') {
+          await triggerSheetsSync();
+        }
+      } catch (e) {
+        console.warn("Manual sheets sync error:", e);
+      }
+      await loadData(true, true);
+    };
     loadData(false, true);
 
     const syncInterval = setInterval(() => {
@@ -174,6 +218,7 @@ export default function App() {
       }
 
       const role: Role = data.user.role;
+      let initialRoute = 'ADMIN';
 
       if (role === 'ADMIN') {
         setUserRole('ADMIN');
@@ -186,7 +231,7 @@ export default function App() {
         const profile = getVendorProfile(usuarioUpper);
         setUserRole('VENDEDOR');
         setLoggedInVendor(profile.canonicalUsername);
-        let initialRoute = profile.routes.length > 1 
+        initialRoute = profile.routes.length > 1 
           ? 'ALL_MY_ROUTES' 
           : (profile.routes[0]?.id || profile.canonicalUsername);
         if (usuarioUpper.includes('VILLA') && profile.routes.some(r => r.id.includes('VILLA'))) {
@@ -200,8 +245,10 @@ export default function App() {
         localStorage.setItem('dashboard_fdv_active_route', initialRoute);
       }
       
+      if (data?.token && data?.user) {
+        saveAuthSession(data.token, data.user, initialRoute);
+      }
       setIsLoggedIn(true);
-      localStorage.setItem('dashboard_fdv_logged_in', 'true');
 
       if (hasValidSupabaseConfig) {
         supabase.from('trazabilidad_login').insert([{
@@ -221,17 +268,14 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('dashboard_fdv_logged_in');
-    localStorage.removeItem('dashboard_fdv_role');
-    localStorage.removeItem('dashboard_fdv_vendor');
-    localStorage.removeItem('dashboard_fdv_active_route');
+    clearAuthSession();
     setIsLoggedIn(false);
     setAuthUsuario('');
     setAuthPassword('');
     setLoginError('');
-    setUserRole('ADMIN');
-    setLoggedInVendor('ADMIN');
-    setActiveVendedorId('ADMIN');
+    setUserRole('VENDEDOR');
+    setLoggedInVendor('');
+    setActiveVendedorId('');
   };
 
   const handleRouteChange = (newRouteId: string) => {
@@ -375,62 +419,21 @@ export default function App() {
     return Array.from(map.values());
   }, [userRole, activeVendedorId, loggedInVendor, activacionData, volumenData]);
 
-  const chatContext = useMemo(() => {
-    if (activeTab === 'ACTIVACION_RUBRO') {
-      return "Resumen de activación por rubro (metas vs activados): " + JSON.stringify(filteredMetas);
-    }
-    if (activeTab === 'ACTIVACION_CLIENTES') {
-      return "Lista de clientes (resumen de activacion por rubro): " + JSON.stringify(filteredActivacion.map(a => ({ cliente: a.cliente, status: a.status, productos: a.cats })));
-    }
-    if (activeTab === 'VOLUMEN') {
-      return "Resumen de volumen (artículos más vendidos y categorias, muestra limitada a los primeros 50): " + JSON.stringify(filteredVolumen.slice(0, 50));
-    }
-    if (activeTab === 'DEGUSTACIONES') {
-      const vendorKey = activeVendedorDisplayName.toUpperCase().trim();
-      const misDegs = userRole === 'ADMIN' && activeVendedorId === 'ADMIN'
-        ? degustacionesList
-        : degustacionesList.filter(d => {
-            const dV = (d.vendedorNombre || '').toUpperCase().trim();
-            const dId = (d.vendedorId || '').toUpperCase().trim();
-            return dV.includes(vendorKey) || vendorKey.includes(dV) || dId.includes(vendorKey);
-          });
-
-      return `MÓDULO DE DEGUSTACIONES Y TRADE MARKETING:
-Vendedor actual: ${activeVendedorDisplayName} (Rol: ${userRole}).
-Regla de capacidad: Máximo 18 degustaciones al día para toda la empresa (9 en la mañana: 9:00 AM - 1:00 PM y 9 en la tarde: 2:00 PM - 6:00 PM).
-Anticipación mínima: 2 días hábiles. Domingos no laborables.
-Total degustaciones registradas para este vendedor (${misDegs.length}):
-- Solicitadas (en revisión): ${misDegs.filter(d => d.estado === 'SOLICITADA').length}
-- Aprobadas (en agenda con promotora): ${misDegs.filter(d => d.estado === 'APROBADA').length}
-- Realizadas: ${misDegs.filter(d => d.estado === 'REALIZADA').length}
-- Rechazadas: ${misDegs.filter(d => d.estado === 'RECHAZADA' || d.estado === 'CANCELADA').length}
-Próximas degustaciones programadas: ${JSON.stringify(misDegs.slice(0, 15).map(d => ({
-  cliente: d.clienteNombre,
-  fecha: d.fecha,
-  turno: d.turno,
-  hora: d.hora,
-  estado: d.estado,
-  promotora: d.promotoraAsignada || 'En asignación',
-  kilos: d.kilosEstimados,
-  productos: d.productos
-})))}`;
-    }
-    if (activeTab === 'ALKOSTO') {
-      return `MÓDULO DE PEDIDOS ALKOSTO (CUENTAS CLAVE 2 - SAIRÚ VALLES):
-Gestión, carga y seguimiento de órdenes de compra y pedidos comerciales para ALKOSTO DONDE COMPRAR ES GANAR, C.A.
-Sucursales activas: Zona Industrial (#7497), La Limpia (#7498), Delicias Norte (#7499), Circunvalación 2 (#7500), Bella Vista (#7501), San Francisco (#7502), Curva de Molina (#7503), El Milagro (#7680), La Coromoto (#7905), Cabimas (#8160), CEDI Principal (#1560).
-Portafolio estrella: Mortadela Especial de Pollo Asturias 900g, Mortadela Salpicao 900g, Mortadela Corral, Chuleta Fresca Asturias, Jamón Cocido Superior Asturias, Pollo Entero y Despresado, Víveres básicos.`;
-    }
-    return "No hay datos específicos para esta pestaña.";
-  }, [activeTab, filteredMetas, filteredActivacion, filteredVolumen, activeVendedorDisplayName]);
-
-  // Hook colocado antes de cualquier return condicional (Rules of Hooks)
-  const isSairuOrAdmin = useMemo(() => {
-    if (userRole === 'ADMIN') return true;
+  // Restricción estricta: Alkosto SOLO visible y accesible para Sairú Valles
+  const isSairuValles = useMemo(() => {
     const vendorNorm = (loggedInVendor || '').toUpperCase();
-    const routeNorm = (activeVendedorId || '').toUpperCase();
-    return vendorNorm.includes('SAIRU') || vendorNorm.includes('VALLES') || routeNorm.includes('CUENTAS CLAVE 2') || routeNorm.includes('SAIRU');
-  }, [userRole, loggedInVendor, activeVendedorId]);
+    return vendorNorm.includes('SAIRU') || vendorNorm.includes('VALLES');
+  }, [loggedInVendor]);
+
+  // Si cambia de usuario o rol y la pestaña activa no le corresponde, regresar a ACTIVACION_RUBRO
+  useEffect(() => {
+    if (activeTab === 'ALKOSTO' && !isSairuValles) {
+      setActiveTab('ACTIVACION_RUBRO');
+    }
+    if (activeTab === 'TRAZABILIDAD' && userRole !== 'ADMIN') {
+      setActiveTab('ACTIVACION_RUBRO');
+    }
+  }, [activeTab, isSairuValles, userRole]);
 
   if (!isLoggedIn) {
     return (
@@ -528,7 +531,7 @@ Portafolio estrella: Mortadela Especial de Pollo Asturias 900g, Mortadela Salpic
       label: 'Degustaciones', 
       icon: Sparkles 
     },
-    ...(isSairuOrAdmin ? [{ id: 'ALKOSTO' as TabId, label: 'ALKOSTO', icon: ShoppingCart }] : []),
+    ...(isSairuValles ? [{ id: 'ALKOSTO' as TabId, label: 'ALKOSTO', icon: ShoppingCart }] : []),
     ...(userRole === 'ADMIN' ? [{ id: 'TRAZABILIDAD' as TabId, label: 'Trazabilidad', icon: Activity }] : []),
   ];
 
@@ -700,65 +703,72 @@ Portafolio estrella: Mortadela Especial de Pollo Asturias 900g, Mortadela Salpic
       </header>
 
       <main className="max-w-7xl mx-auto space-y-6">
-        {activeTab !== 'COBROS_OCR' && <RecorridoMes onSync={() => (window as any).refreshData()} loading={loading} />}
+        <Suspense fallback={<div className="h-20 bg-neutral-900/40 border border-neutral-800/80 rounded-2xl animate-pulse" />}>
+          {activeTab !== 'COBROS_OCR' && <RecorridoMes onSync={() => (window as any).refreshData()} loading={loading} />}
+        </Suspense>
 
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-          {activeTab === 'ACTIVACION_RUBRO' && (
-            <ActivacionRubro 
-              filteredVolumen={filteredVolumen} 
-              filteredActivacion={filteredActivacion} 
-              metasActivacion={filteredMetas}
-              activeVendedorId={activeVendedorDisplayName}
-            />
-          )}
-          {activeTab === 'VOLUMEN' && (
-            <VolumenTab 
-              filteredVolumen={filteredVolumen} 
-              activeVendedorId={activeVendedorDisplayName}
-            />
-          )}
-          {activeTab === 'ACTIVACION_CLIENTES' && (
-            <ActivacionClientes 
-              filteredVolumen={filteredVolumen} 
-              filteredActivacion={filteredActivacion} 
-              activeVendedorId={activeVendedorDisplayName}
-            />
-          )}
-          {activeTab === 'COBROS_OCR' && (
-            <CobrosOCR 
-              clientes={userRole === 'ADMIN' && activeVendedorId === 'ADMIN' ? activacionData : filteredActivacion} 
-              currentVendedor={userRole === 'ADMIN' ? (activeVendedorId === 'ADMIN' ? 'ADMIN' : activeVendedorDisplayName) : (currentVendorProfile?.displayName || loggedInVendor)}
-            />
-          )}
-          {activeTab === 'DEGUSTACIONES' && (
-            <DegustacionesTab 
-              userRole={userRole}
-              vendedorName={userRole === 'ADMIN' ? (activeVendedorId === 'ADMIN' ? 'GERENCIA TRADE MARKETING' : activeVendedorDisplayName) : (currentVendorProfile?.displayName || loggedInVendor)}
-              activeVendedorId={activeVendedorId}
-              clientesAsignados={clientesParaDegustaciones}
-              onNavigateToTab={(tab) => setActiveTab(tab as TabId)}
-            />
-          )}
-          {activeTab === 'ALKOSTO' && (
-            <AlkostoTab 
-              vendedoraNombre={userRole === 'ADMIN' && activeVendedorId !== 'ADMIN' ? activeVendedorDisplayName : (currentVendorProfile?.displayName || loggedInVendor || 'SAIRU VALLES')}
-              userRole={userRole}
-            />
-          )}
-          {activeTab === 'TRAZABILIDAD' && (
-            <TrazabilidadTab />
-          )}
-        </div>
+        <Suspense fallback={
+          <div className="flex flex-col items-center justify-center p-16 space-y-3 bg-neutral-950/60 border border-neutral-800 rounded-2xl min-h-[300px]">
+            <div className="w-8 h-8 border-3 border-red-500/30 border-t-red-500 rounded-full animate-spin" />
+            <span className="text-xs font-sans font-bold text-neutral-400 uppercase tracking-wider">Cargando módulo...</span>
+          </div>
+        }>
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-500 space-y-6">
+            {(activeTab === 'VOLUMEN' || activeTab === 'ACTIVACION_RUBRO' || activeTab === 'ACTIVACION_CLIENTES') && (
+              <HistorialSection
+                key={activeTab}
+                vistaInicial={activeTab === 'VOLUMEN' ? 'volumen' : activeTab === 'ACTIVACION_RUBRO' ? 'rubros' : 'clientes'}
+                vendedor={activeVendedorId}
+              />
+            )}
+            {activeTab === 'ACTIVACION_RUBRO' && (
+              <ActivacionRubro 
+                filteredVolumen={filteredVolumen} 
+                filteredActivacion={filteredActivacion} 
+                metasActivacion={filteredMetas}
+                activeVendedorId={activeVendedorDisplayName}
+              />
+            )}
+            {activeTab === 'VOLUMEN' && (
+              <VolumenTab 
+                filteredVolumen={filteredVolumen} 
+                activeVendedorId={activeVendedorDisplayName}
+              />
+            )}
+            {activeTab === 'ACTIVACION_CLIENTES' && (
+              <ActivacionClientes 
+                filteredVolumen={filteredVolumen} 
+                filteredActivacion={filteredActivacion} 
+                activeVendedorId={activeVendedorDisplayName}
+              />
+            )}
+            {activeTab === 'COBROS_OCR' && (
+              <CobrosOCR 
+                clientes={userRole === 'ADMIN' && activeVendedorId === 'ADMIN' ? activacionData : filteredActivacion} 
+                currentVendedor={userRole === 'ADMIN' ? (activeVendedorId === 'ADMIN' ? 'ADMIN' : activeVendedorDisplayName) : (currentVendorProfile?.displayName || loggedInVendor)}
+              />
+            )}
+            {activeTab === 'DEGUSTACIONES' && (
+              <DegustacionesTab 
+                userRole={userRole}
+                vendedorName={userRole === 'ADMIN' ? (activeVendedorId === 'ADMIN' ? 'GERENCIA TRADE MARKETING' : activeVendedorDisplayName) : (currentVendorProfile?.displayName || loggedInVendor)}
+                activeVendedorId={activeVendedorId}
+                clientesAsignados={clientesParaDegustaciones}
+                onNavigateToTab={(tab) => setActiveTab(tab as TabId)}
+              />
+            )}
+            {activeTab === 'ALKOSTO' && isSairuValles && (
+              <AlkostoTab 
+                vendedoraNombre={currentVendorProfile?.displayName || loggedInVendor || 'SAIRU VALLES'}
+                userRole={userRole}
+              />
+            )}
+            {activeTab === 'TRAZABILIDAD' && userRole === 'ADMIN' && (
+              <TrazabilidadTab />
+            )}
+          </div>
+        </Suspense>
       </main>
-
-      {/* Asistente Flotante para Vendedores */}
-      <SalesAssistant 
-        session={session} 
-        activeTab={activeTab} 
-        vendedorName={activeVendedorDisplayName}
-        contextData={chatContext}
-        onNavigate={(tab) => setActiveTab(tab as TabId)}
-      />
     </div>
   );
 }

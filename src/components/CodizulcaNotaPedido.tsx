@@ -548,6 +548,8 @@ export function CodizulcaNotaPedido({
         }, 0),
         totalUSD: totalGeneral,
         estado: 'ENVIADO',
+        transmitido_a_pedidos_manuales: true,
+        fecha_transmision: new Date().toISOString(),
         condicionPago: 'Crédito 21 días',
         observaciones: observaciones,
         createdAt: new Date().toISOString()
@@ -557,12 +559,12 @@ export function CodizulcaNotaPedido({
       const correlativoFinal = pedidoGuardado.correlativo || pedidoGuardado.numeroPedido;
       setNroPedido(correlativoFinal);
 
-      // Transmitir automáticamente al programa externo / Google Sheets
+      // Transmitir directamente a la Sala de Espera del Programa de Pedidos Manuales
       try {
         await transmitirPedidoAlkosto(pedidoGuardado);
-        setMensajeExito(`¡Pedido enviado a Sala de Espera! Correlativo asignado automáticamente: N° ${correlativoFinal} (transmitido a Google Sheets)`);
+        setMensajeExito(`¡Pedido N° ${correlativoFinal} transmitido directamente a la Sala de Espera de Pedidos Manuales! Tu app queda despejada.`);
       } catch (txErr) {
-        setMensajeExito(`¡Pedido guardado en Sala de Espera! Correlativo asignado automáticamente: N° ${correlativoFinal}`);
+        setMensajeExito(`¡Pedido guardado N° ${correlativoFinal}! Enviado a Pedidos Manuales.`);
       }
 
       setTimeout(() => setMensajeExito(null), 5000);
@@ -643,6 +645,8 @@ export function CodizulcaNotaPedido({
               totalKilos,
               totalUSD,
               estado: 'ENVIADO',
+              transmitido_a_pedidos_manuales: true,
+              fecha_transmision: new Date().toISOString(),
               condicionPago: 'Crédito 21 días',
               observaciones: observaciones,
               createdAt: new Date(Date.now() + idx * 40).toISOString()
@@ -693,6 +697,8 @@ export function CodizulcaNotaPedido({
           }, 0),
           totalUSD: totalGeneral,
           estado: 'ENVIADO',
+          transmitido_a_pedidos_manuales: true,
+          fecha_transmision: new Date().toISOString(),
           condicionPago: 'Crédito 21 días',
           observaciones: observaciones,
           createdAt: new Date().toISOString()
@@ -700,7 +706,7 @@ export function CodizulcaNotaPedido({
         pedidosParaEnviar.push(pedidoUnico);
       }
 
-      // Guardar secuencialmente cada pedido para que cada uno reciba su correlativo automático en la sala de espera
+      // Guardar secuencialmente cada pedido y transmitir directamente a la Sala de Espera de Pedidos Manuales
       const guardados: AlkostoOrder[] = [];
       for (const p of pedidosParaEnviar) {
         const g = await saveAlkostoOrder(p);
@@ -708,17 +714,17 @@ export function CodizulcaNotaPedido({
         try {
           await transmitirPedidoAlkosto(g);
         } catch (tErr) {
-          console.warn("Transmisión Sheets secundaria omitida:", tErr);
+          console.warn("Transmisión Pedidos Manuales aviso:", tErr);
         }
       }
 
       const correlativosList = guardados.map(g => g.correlativo || g.numeroPedido);
       if (guardados.length > 1) {
-        setMensajeExito(`¡${guardados.length} pedidos enviados por separado a Sala de Espera! Correlativos asignados: N° ${correlativosList.join(', N° ')}. Formato limpio listo para la siguiente OC.`);
+        setMensajeExito(`¡${guardados.length} pedidos transmitidos directamente a la Sala de Espera del Gestor de Pedidos Manuales! Correlativos: N° ${correlativosList.join(', N° ')}. Formato limpio listo para la siguiente OC.`);
       } else {
         const unicoCorrelativo = correlativosList[0] || 'AUTO';
         setNroPedido(unicoCorrelativo);
-        setMensajeExito(`¡Pedido enviado a Sala de Espera! Correlativo asignado: N° ${unicoCorrelativo}. Formato limpio listo para la siguiente OC.`);
+        setMensajeExito(`¡Pedido transmitido directamente a la Sala de Espera del Gestor de Pedidos Manuales! Correlativo: N° ${unicoCorrelativo}. Tu app queda despejada.`);
       }
 
       // Limpiar y resetear el formato inmediatamente para que quede listo para enviar otra OC
@@ -827,18 +833,17 @@ export function CodizulcaNotaPedido({
           )}
         </div>
 
-        {/* FILA 3: BOTÓN DE ACCIÓN ÚNICO REQUERIDO: SOLO ENVIAR A BANDEJA */}
+        {/* FILA 3: BOTÓN DE TRANSMISIÓN DIRECTA A SALA DE ESPERA DE PEDIDOS MANUALES */}
         <div className="w-full pt-1">
-          {/* BOTÓN VERDE ÚNICO: " Enviar a bandeja" */}
           <button
             type="button"
             onClick={handleTransmitirAOtroPrograma}
             disabled={transmitiendo}
-            className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] disabled:opacity-50 text-white py-3 px-6 rounded-xl text-sm font-bold transition-all shadow-lg shadow-emerald-950/60"
-            title="Enviar a bandeja"
+            className="w-full flex items-center justify-center gap-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] disabled:opacity-50 text-white py-3.5 px-6 rounded-xl text-sm font-black transition-all shadow-lg shadow-emerald-950/60 uppercase tracking-wide cursor-pointer"
+            title="Envía el pedido directamente a la Sala de Espera de Pedidos Manuales sin dejarlo en espera en tu app"
           >
             <Send className="w-4 h-4 shrink-0" />
-            <span> Enviar a bandeja</span>
+            <span>{transmitiendo ? 'Transmitiendo a Pedidos Manuales...' : '🚀 Transmitir Directo a Sala de Espera (Pedidos Manuales)'}</span>
           </button>
         </div>
       </div>

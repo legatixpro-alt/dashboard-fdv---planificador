@@ -6,11 +6,14 @@ export interface VolumenData {
   vendedorNombre?: string;
   vendedorEmail?: string;
   skuId: string;
+  sku?: string;
   articulo?: string;
   cliente: string;
   categoria: string; // Rubro / Categoría
   meta: number;
+  metaKg?: number;
   ejecutado: number;
+  ejecutadoKg?: number;
   zona: string;
   lat?: number;
   lng?: number;
@@ -139,6 +142,8 @@ export interface AlkostoOrder {
   contactoRecepcion?: string;
   telefonoRecepcion?: string;
   observaciones?: string;
+  transmitido_a_pedidos_manuales?: boolean;
+  fecha_transmision?: string;
   createdAt: string;
   updatedAt?: string;
 }

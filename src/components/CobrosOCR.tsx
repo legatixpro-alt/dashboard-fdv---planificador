@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { getAuthHeaders } from '../services/authService';
 
 // Error Boundary específico para CobrosOCR para evitar que cualquier fallo deje la pantalla en blanco
 interface ErrorBoundaryProps {
@@ -188,27 +189,49 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   }, [fechaPago]);
 
-  // Limpiar y parsear montos en formato venezolano e internacional
-  const parseMonto = (str: string): number => {
-    if (!str) return 0;
-    let raw = str.replace(/[^0-9,.-]/g, '');
-    if (raw.includes('.') && raw.includes(',')) {
-      raw = raw.replace(/\./g, '').replace(',', '.');
-    } else if (raw.includes(',')) {
-      raw = raw.replace(',', '.');
+  // Limpiar y parsear montos en formato venezolano e internacional de forma 100% exacta
+  const parseMontoExacto = (val: any): number => {
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    if (!val) return 0;
+    const s = String(val).trim();
+    if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
+      const num = parseFloat(s.replace(/\./g, '').replace(',', '.'));
+      return isNaN(num) ? 0 : num;
     }
-    const val = parseFloat(raw);
-    return isNaN(val) ? 0 : val;
+    if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
+      const num = parseFloat(s.replace(/,/g, ''));
+      return isNaN(num) ? 0 : num;
+    }
+    if (/^\d+,\d+$/.test(s)) {
+      const num = parseFloat(s.replace(',', '.'));
+      return isNaN(num) ? 0 : num;
+    }
+    const cleaned = s.replace(/[$BsUSD\s]/gi, '');
+    if (cleaned.includes('.') && cleaned.includes(',')) {
+      if (cleaned.indexOf('.') < cleaned.indexOf(',')) {
+        const n = parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
+        return isNaN(n) ? 0 : n;
+      } else {
+        const n = parseFloat(cleaned.replace(/,/g, ''));
+        return isNaN(n) ? 0 : n;
+      }
+    }
+    if (cleaned.includes(',')) {
+      const n = parseFloat(cleaned.replace(',', '.'));
+      return isNaN(n) ? 0 : n;
+    }
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
   };
 
   const handleMontoChange = (val: string) => {
     setMontoDisplay(val);
-    const num = parseMonto(val);
+    const num = parseMontoExacto(val);
     setMontoNumerico(num);
   };
 
   const handleMontoBlur = () => {
-    const num = parseMonto(montoDisplay);
+    const num = parseMontoExacto(montoDisplay);
     if (num > 0) {
       setMontoDisplay(new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num));
       setMontoNumerico(num);
@@ -218,53 +241,85 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   };
 
-  // Buscador y sugerencias de clientes
+  // Buscador y sugerencias de clientes flexible (soporta ceros a la izquierda y nombres)
   const clientSuggestions = useMemo(() => {
-    const clean = codigoCliente.replace(/^[#\s]+/, '').trim().toLowerCase();
-    if (!clean || clean.length < 1) return [];
+    const rawClean = codigoCliente.replace(/^[#\s]+/, '').trim().toLowerCase();
+    if (!rawClean || rawClean.length < 1) return [];
+    const cleanNoZeros = rawClean.replace(/^0+/, '');
 
     return clientes.filter(c => {
-      const cId = String(c.id || '').replace(/^[#\s]+/, '').trim().toLowerCase();
-      const cName = String(c.cliente || c.razonSocial || '').toLowerCase();
-      return cId.includes(clean) || cName.includes(clean);
-    }).slice(0, 10);
+      const cId = String(c.id || c.cliente_codigo || '').replace(/^[#\s]+/, '').trim().toLowerCase();
+      const cIdNoZeros = cId.replace(/^0+/, '');
+      const cName = String(c.cliente || c.cliente_nombre || c.razonSocial || '').toLowerCase();
+
+      return cId.includes(rawClean) || 
+             (cleanNoZeros.length > 0 && cIdNoZeros.includes(cleanNoZeros)) ||
+             cName.includes(rawClean);
+    }).slice(0, 12);
   }, [codigoCliente, clientes]);
 
   const handleCodigoChange = (val: string) => {
     setCodigoCliente(val);
     setShowSuggestions(true);
 
-    const clean = val.replace(/^[#\s]+/, '').trim().toLowerCase();
-    if (!clean) return;
+    const rawClean = val.replace(/^[#\s]+/, '').trim().toLowerCase();
+    if (!rawClean) return;
+    const cleanNoZeros = rawClean.replace(/^0+/, '');
 
-    // Búsqueda de coincidencia exacta por código
+    // Búsqueda de coincidencia exacta por código (con o sin ceros)
     const exact = clientes.find(c => {
-      const cId = String(c.id || '').replace(/^[#\s]+/, '').trim().toLowerCase();
-      return cId === clean;
+      const cId = String(c.id || c.cliente_codigo || '').replace(/^[#\s]+/, '').trim().toLowerCase();
+      const cIdNoZeros = cId.replace(/^0+/, '');
+      return cId === rawClean || (cleanNoZeros.length > 0 && cIdNoZeros === cleanNoZeros);
     });
 
     if (exact) {
-      const foundName = exact.cliente || exact.razonSocial || '';
+      const foundName = exact.cliente || exact.cliente_nombre || exact.razonSocial || '';
       setNombreCliente(foundName);
-      setRucCliente(String(exact.id || ''));
+      setRucCliente(String(exact.id || exact.cliente_codigo || ''));
       setAlertMsg({ type: 'info', text: `Cliente identificado: ${foundName}` });
       setTimeout(() => setAlertMsg(null), 3500);
     }
   };
 
+  const handleCodigoBlur = () => {
+    setTimeout(async () => {
+      setShowSuggestions(false);
+      const clean = codigoCliente.replace(/^[#\s]+/, '').trim();
+      if (clean && !nombreCliente.trim()) {
+        try {
+          const res = await fetch(`/api/client-lookup?codigo=${encodeURIComponent(clean.replace(/^0+/, '') || clean)}`, {
+            headers: getAuthHeaders()
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.nombre) {
+              setNombreCliente(data.nombre);
+              setRucCliente(data.ruc || clean);
+              setAlertMsg({ type: 'info', text: `Cliente encontrado en base de datos: ${data.nombre}` });
+              setTimeout(() => setAlertMsg(null), 3000);
+            }
+          }
+        } catch (e) {}
+      }
+    }, 250);
+  };
+
   const selectClient = (c: any) => {
-    setCodigoCliente(String(c.id || ''));
-    setNombreCliente(c.cliente || c.razonSocial || '');
-    setRucCliente(String(c.id || ''));
+    const code = String(c.id || c.cliente_codigo || '');
+    const name = c.cliente || c.cliente_nombre || c.razonSocial || '';
+    setCodigoCliente(code);
+    setNombreCliente(name);
+    setRucCliente(code);
     setShowSuggestions(false);
-    setAlertMsg({ type: 'info', text: `Cliente seleccionado: ${c.cliente || c.razonSocial}` });
+    setAlertMsg({ type: 'info', text: `Cliente seleccionado: ${name}` });
     setTimeout(() => setAlertMsg(null), 3000);
   };
 
   // Procesamiento de imagen con canvas y compresión
   const handleImageInput = async (file: File) => {
-    if (pagosConsolidados.length >= 30) {
-      setAlertMsg({ type: 'error', text: 'Has alcanzado el límite de 30 pagos en la relación. Por favor exporta en PDF para archivar.' });
+    if (pagosConsolidados.length >= 60) {
+      setAlertMsg({ type: 'error', text: 'Has alcanzado el límite de 60 pagos en la relación. Por favor exporta en PDF para archivar.' });
       return;
     }
 
@@ -334,7 +389,10 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     try {
       const res = await fetch('/api/ocr', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify({ imageBase64: base64 })
       });
 
@@ -350,13 +408,34 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       // Asignar los campos extraídos
       if (data.banco && data.banco !== 'null') setBanco(data.banco);
       if (data.referencia && data.referencia !== 'null') setReferencia(String(data.referencia).trim());
-      if (data.titular && data.titular !== 'null') setTitular(data.titular);
+      if (data.titular && data.titular !== 'null') {
+        const titularStr = String(data.titular).trim();
+        setTitular(titularStr);
+
+        // Auto-vincular cliente si no se ha seleccionado y coincide con titular
+        if (!codigoCliente && titularStr.length > 3) {
+          const tClean = titularStr.toLowerCase();
+          const match = clientes.find(c => {
+            const cName = String(c.cliente || c.cliente_nombre || c.razonSocial || '').toLowerCase();
+            return cName && (cName.includes(tClean) || tClean.includes(cName));
+          });
+          if (match) {
+            const foundCode = String(match.id || match.cliente_codigo || '');
+            const foundName = match.cliente || match.cliente_nombre || match.razonSocial || '';
+            setCodigoCliente(foundCode);
+            setNombreCliente(foundName);
+            setRucCliente(foundCode);
+          }
+        }
+      }
       if (data.rif && data.rif !== 'null') setRifTitular(data.rif);
 
-      if (data.monto !== undefined && data.monto !== null && !isNaN(Number(data.monto))) {
-        const num = Number(data.monto);
-        setMontoNumerico(num);
-        setMontoDisplay(new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num));
+      if (data.monto !== undefined && data.monto !== null) {
+        const num = parseMontoExacto(data.monto);
+        if (num > 0) {
+          setMontoNumerico(num);
+          setMontoDisplay(new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num));
+        }
       }
 
       if (data.fecha_pago && data.fecha_pago !== 'null') {
@@ -384,7 +463,14 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       setTimeout(() => setAlertMsg(null), 4000);
     } catch (err: any) {
       console.error("Error en processOCR:", err);
-      setAlertMsg({ type: 'error', text: err.message || 'Error al validar con OCR. Puedes ingresar los datos manualmente.' });
+      const raw = String(err?.message || '');
+      const looksRaw = raw.trim().startsWith('{') || /RESOURCE_EXHAUSTED|prepayment|billing/i.test(raw);
+      setAlertMsg({
+        type: 'error',
+        text: looksRaw || !raw
+          ? 'El lector automático (IA) no está disponible por ahora. Ingresa los datos del pago manualmente.'
+          : raw
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -431,6 +517,18 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         setAlertMsg({ type: 'error', text: `¡Atención! La referencia ${cleanRef} ya está registrada en la lista de cobros actual.` });
         setIsProcessing(false);
         return;
+      }
+
+      // Verificar si ya existe en el historial archivado
+      const existeEnHistorial = historialRelaciones.some(rel => 
+        (rel.pagos || []).some((p: any) => String(p.referencia || '').trim().toLowerCase() === cleanRef.toLowerCase())
+      );
+      if (existeEnHistorial) {
+        const confirmar = window.confirm(`⚠️ Advertencia: La referencia ${cleanRef} ya fue registrada en una relación anterior archivada en el historial. ¿Estás seguro de registrarla nuevamente?`);
+        if (!confirmar) {
+          setIsProcessing(false);
+          return;
+        }
       }
 
       const tasaNum = parseFloat(tasa) || 0;
@@ -902,9 +1000,16 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-sans font-bold text-neutral-400 uppercase tracking-wider mb-1 block">
-                    Monto (Bs.) *
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-sans font-bold text-neutral-400 uppercase tracking-wider block">
+                      Monto (Bs.) *
+                    </label>
+                    {montoNumerico > 0 && parseFloat(tasa) > 0 && (
+                      <span className="text-[11px] font-mono text-emerald-400 font-bold">
+                        ≈ ${(montoNumerico / parseFloat(tasa)).toFixed(2)} USD
+                      </span>
+                    )}
+                  </div>
                   <input 
                     type="text" 
                     value={montoDisplay} 

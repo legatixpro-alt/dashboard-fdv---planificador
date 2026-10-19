@@ -24,14 +24,38 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
 
   // In a real scenario, meta could be higher, using static multiplier to match the design vibe 
   // since the mock data is too small to look like the 50k+ numbers in the screenshot.
-  const rawMeta = filteredVolumen.reduce((acc, curr) => acc + curr.meta, 0);
-  const rawEjecutado = filteredVolumen.reduce((acc, curr) => acc + curr.ejecutado, 0);
+  const rawMeta = filteredVolumen.reduce((acc, curr) => {
+    const val = Number(curr.meta ?? (curr as any).metaKg);
+    return acc + (isNaN(val) ? 0 : val);
+  }, 0);
+  const rawEjecutado = filteredVolumen.reduce((acc, curr) => {
+    const val = Number(curr.ejecutado ?? (curr as any).ejecutadoKg);
+    return acc + (isNaN(val) ? 0 : val);
+  }, 0);
   
   // Scaling mock data to look like the screenshot if it's less than 10k
   const scaleFactor = 1; 
   
-  const totalMeta = Math.round(rawMeta * scaleFactor);
+  const totalMeta = Math.round((Number(rawMeta) || 0) * scaleFactor);
+  const totalEjecutado = Math.round((Number(rawEjecutado) || 0) * scaleFactor);
   
+  const cumplimiento = totalMeta > 0 ? (totalEjecutado / totalMeta) * 100 : 0;
+  const faltante = Math.max(0, totalMeta - totalEjecutado);
+  const mesInfo = useMemo(() => getMesLaboralInfo(), []);
+  const diasRestantes = Math.max(1, mesInfo.remainingWorkingDays || 1);
+  const diasTranscurridos = Math.max(0, mesInfo.elapsedWorkingDays || 0);
+  const diasTotales = Math.max(1, mesInfo.totalWorkingDays || 22);
+  const avanceTiempo = mesInfo.percentage || 0;
+  
+  // Proyeccion cierre = (Ejecutado / dias transcurridos) * dias totales
+  const proyeccion = diasTranscurridos > 0 ? Math.round((totalEjecutado / diasTranscurridos) * diasTotales) : totalEjecutado;
+  const ritmoRequerido = diasRestantes > 0 ? Math.round(faltante / diasRestantes) : 0;
+
+  const formatNumber = (num: number | undefined | null) => {
+    if (num === null || num === undefined || isNaN(Number(num))) return '0';
+    return Number(num).toLocaleString('en-US');
+  };
+
   const generarPDF = () => {
     const doc = new jsPDF();
     const title = "Reporte de Volumen";
@@ -46,7 +70,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
       stat.articulo,
       formatNumber(stat.meta),
       formatNumber(stat.ejecutado),
-      stat.cumplimiento.toFixed(2) + '%'
+      (isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2) + '%'
     ]);
     
     tableData.push([
@@ -54,7 +78,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
       '',
       formatNumber(totalMeta),
       formatNumber(totalEjecutado),
-      cumplimiento.toFixed(2) + '%'
+      (isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2) + '%'
     ]);
 
     autoTable(doc, {
@@ -67,22 +91,6 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
 
     doc.save(`Reporte_Volumen_${vendedorName.replace(/\s+/g, '_')}.pdf`);
   };
-
-  const totalEjecutado = Math.round(rawEjecutado * scaleFactor);
-  
-  const cumplimiento = totalMeta > 0 ? (totalEjecutado / totalMeta) * 100 : 0;
-  const faltante = Math.max(0, totalMeta - totalEjecutado);
-  const mesInfo = useMemo(() => getMesLaboralInfo(), []);
-  const diasRestantes = mesInfo.remainingWorkingDays;
-  const diasTranscurridos = mesInfo.elapsedWorkingDays;
-  const diasTotales = mesInfo.totalWorkingDays;
-  const avanceTiempo = mesInfo.percentage;
-  
-  // Proyeccion cierre = (Ejecutado / dias transcurridos) * dias totales
-  const proyeccion = diasTranscurridos > 0 ? Math.round((totalEjecutado / diasTranscurridos) * diasTotales) : totalEjecutado;
-  const ritmoRequerido = diasRestantes > 0 ? Math.round(faltante / diasRestantes) : 0;
-
-  const formatNumber = (num: number) => num.toLocaleString('en-US');
 
   // Aggregating SKU data
   const skuStats: SkuStats[] = useMemo(() => {
@@ -98,13 +106,16 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
     };
 
     filteredVolumen.forEach(v => {
-      // Mock some GEN- prefixes to match screenshot styling
-      const displaySku = v.skuId;
+      const displaySku = v.skuId || (v as any).sku || 'GENERICO';
+      const m = Number(v.meta ?? (v as any).metaKg);
+      const e = Number(v.ejecutado ?? (v as any).ejecutadoKg);
+      const validMeta = isNaN(m) ? 0 : m;
+      const validEjecutado = isNaN(e) ? 0 : e;
       
       if (!map.has(displaySku)) {
         map.set(displaySku, {
           skuId: displaySku,
-          articulo: v.articulo || getArticuloName(v.skuId),
+          articulo: v.articulo || getArticuloName(displaySku),
           meta: 0,
           ejecutado: 0,
           cumplimiento: 0
@@ -112,14 +123,13 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
       }
       
       const stat = map.get(displaySku)!;
-      stat.meta += v.meta;
-      stat.ejecutado += v.ejecutado;
+      stat.meta += validMeta;
+      stat.ejecutado += validEjecutado;
     });
 
     return Array.from(map.values()).map(s => {
-      // Scale up to match screenshot numbers
-      s.meta = Math.round(s.meta * scaleFactor);
-      s.ejecutado = Math.round(s.ejecutado * scaleFactor);
+      s.meta = Math.round((Number(s.meta) || 0) * scaleFactor);
+      s.ejecutado = Math.round((Number(s.ejecutado) || 0) * scaleFactor);
       s.cumplimiento = s.meta > 0 ? (s.ejecutado / s.meta) * 100 : 0;
       return s;
     }).sort((a, b) => b.ejecutado - a.ejecutado); // Sort descending by executed
@@ -181,14 +191,14 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
           <div className="mt-auto">
             <div className="flex justify-between items-end mb-2">
               <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-xs font-mono font-bold px-2 py-1 rounded">
-                {cumplimiento.toFixed(1)}%
+                {(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(1)}%
               </div>
               <div className="text-[10px] md:text-xs font-sans text-neutral-400 font-bold">
                 Falta: <span className="text-red-400">{formatNumber(faltante)} kg</span>
               </div>
             </div>
             <div className="w-full bg-neutral-900 rounded-full h-1.5 md:h-2 overflow-hidden border border-neutral-800">
-              <div className="bg-red-500 h-full rounded-full" style={{ width: `${Math.min(100, cumplimiento)}%` }}></div>
+              <div className="bg-red-500 h-full rounded-full" style={{ width: `${Math.min(100, isNaN(cumplimiento) ? 0 : cumplimiento)}%` }}></div>
             </div>
           </div>
         </div>
@@ -213,7 +223,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
 
           <div className="mt-auto border-t border-neutral-800/60 pt-3 flex justify-between items-center">
             <span className="text-[10px] md:text-xs font-sans font-bold text-amber-500">Avance tiempo:</span>
-            <span className="text-[10px] md:text-xs font-sans font-bold text-amber-500">Día {diasTranscurridos}/{diasTotales} ({avanceTiempo.toFixed(0)}%)</span>
+            <span className="text-[10px] md:text-xs font-sans font-bold text-amber-500">Día {diasTranscurridos}/{diasTotales} ({(isNaN(avanceTiempo) ? 0 : avanceTiempo).toFixed(0)}%)</span>
           </div>
         </div>
 
@@ -322,7 +332,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
             <div className="text-right pl-4 sm:pl-6">
               <div className="text-[9px] font-sans text-neutral-500 uppercase tracking-wider mb-1">Avance</div>
               <div className={`px-2 py-0.5 rounded border text-[10px] md:text-xs font-mono font-bold ${cumplimiento >= 100 ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
-                {cumplimiento.toFixed(1)}%
+                {(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(1)}%
               </div>
             </div>
           </div>
@@ -355,7 +365,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                     <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado)}</td>
                     <td className="p-3 text-right">
                       <span className={`inline-block px-2 py-1 rounded border text-[10px] font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
-                        {stat.cumplimiento.toFixed(2)}%
+                        {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
                       </span>
                     </td>
                   </tr>
@@ -368,7 +378,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                 <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase tracking-wider">Resumen Acumulado Vendedor</td>
                 <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{formatNumber(totalMeta)}</td>
                 <td className="p-3 border-r border-neutral-800/50 text-right text-emerald-400 font-bold">{formatNumber(totalEjecutado)}</td>
-                <td className="p-3 text-right text-red-400 font-bold">{cumplimiento.toFixed(2)}%</td>
+                <td className="p-3 text-right text-red-400 font-bold">{(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2)}%</td>
               </tr>
             </tbody>
           </table>
@@ -389,7 +399,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                        <div className="flex justify-between items-center mb-2">
                            <span className="text-red-500 font-mono text-xs font-bold">{stat.skuId}</span>
                            <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
-                               {stat.cumplimiento.toFixed(2)}%
+                               {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
                            </span>
                        </div>
                        
