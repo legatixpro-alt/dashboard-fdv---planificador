@@ -48,7 +48,7 @@ export default function App() {
   const [activacionData, setActivacionData] = useState<any[]>([]);
   const [metasActivacion, setMetasActivacion] = useState<any[]>([]);
   const [degustacionesList, setDegustacionesList] = useState<Degustacion[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [session, setSession] = useState<any>(null);
   const [authUsuario, setAuthUsuario] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -125,7 +125,7 @@ export default function App() {
     }
   }, [userRole, loggedInVendor, currentVendorProfile, activeVendedorId]);
 
-  const loadData = useCallback(async (force = false, showLoader = true) => {
+  const loadData = useCallback(async (force = false, showLoader = false) => {
     if (showLoader) setLoading(true);
     try {
       const targetVendor = (userRole === 'ADMIN' && activeVendedorId === 'ADMIN') ? undefined : activeVendedorId;
@@ -140,9 +140,19 @@ export default function App() {
     } catch (err) {
       console.error("Error al sincronizar datos automáticamente", err);
     } finally {
-      if (showLoader) setLoading(false);
+      setLoading(false);
     }
   }, [userRole, activeVendedorId]);
+
+  // Failsafe: nunca permitir que un loader bloquee la pantalla por más de 3 segundos
+  useEffect(() => {
+    if (loading) {
+      const timer = setTimeout(() => {
+        setLoading(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [loading]);
 
   useEffect(() => {
     (window as any).refreshData = async () => {
@@ -532,10 +542,17 @@ export default function App() {
     );
   }
 
-  if (loading) {
+  if (loading && volumenData.length === 0 && activacionData.length === 0) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <p className="text-neutral-400 font-mono tracking-tight animate-pulse">CARGANDO DATA...</p>
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
+        <div className="w-8 h-8 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin mb-4" />
+        <p className="text-neutral-400 font-mono text-xs tracking-widest uppercase animate-pulse mb-3">CARGANDO DATA...</p>
+        <button
+          onClick={() => setLoading(false)}
+          className="text-xs text-neutral-500 hover:text-neutral-300 font-sans underline cursor-pointer"
+        >
+          Continuar al dashboard
+        </button>
       </div>
     );
   }

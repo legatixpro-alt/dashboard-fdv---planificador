@@ -10,6 +10,16 @@ export const getAuthHeaders = (): Record<string, string> => {
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
 
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const fetchVolumenData = async (force: boolean = false, vendorId?: string): Promise<VolumenData[]> => {
   const cacheKey = `${vendorId || 'ALL'}`;
   if (!force && memVolumen && memVolumen.key === cacheKey && (Date.now() - memVolumen.time < MEM_TTL)) {
@@ -17,9 +27,9 @@ export const fetchVolumenData = async (force: boolean = false, vendorId?: string
   }
   try {
     const vParam = vendorId ? `&vendedor=${encodeURIComponent(vendorId)}` : '';
-    const response = await fetch(`/api/data/volumen?force=${force}${vParam}`, {
+    const response = await fetchWithTimeout(`/api/data/volumen?force=${force}${vParam}`, {
       headers: getAuthHeaders()
-    });
+    }, 8000);
     if (!response.ok) return memVolumen?.data || [];
     const text = await response.text();
     if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
@@ -42,9 +52,9 @@ export const fetchActivacionData = async (force: boolean = false, vendorId?: str
   }
   try {
     const vParam = vendorId ? `&vendedor=${encodeURIComponent(vendorId)}` : '';
-    const response = await fetch(`/api/data/activacion?force=${force}${vParam}`, {
+    const response = await fetchWithTimeout(`/api/data/activacion?force=${force}${vParam}`, {
       headers: getAuthHeaders()
-    });
+    }, 8000);
     if (!response.ok) return memActivacion?.data || [];
     const text = await response.text();
     if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
@@ -67,9 +77,9 @@ export const fetchMetasActivacion = async (force: boolean = false, vendorId?: st
   }
   try {
     const vParam = vendorId ? `&vendedor=${encodeURIComponent(vendorId)}` : '';
-    const response = await fetch(`/api/data/metas-activacion?force=${force}${vParam}`, {
+    const response = await fetchWithTimeout(`/api/data/metas-activacion?force=${force}${vParam}`, {
       headers: getAuthHeaders()
-    });
+    }, 8000);
     if (!response.ok) return memMetas?.data || [];
     const text = await response.text();
     if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
