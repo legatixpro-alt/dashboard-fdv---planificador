@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback, Suspense, lazy } from 'react';
 import { Role, VolumenData, ActivacionData } from './types';
-import { fetchVolumenData, fetchActivacionData, fetchMetasActivacion, triggerSheetsSync } from './services/googleSheetsService';
+import { fetchVolumenData, fetchActivacionData, fetchMetasActivacion, triggerSheetsSync, clearSheetsCache } from './services/googleSheetsService';
 import { Lock, User as UserIcon, AlertCircle, ShieldCheck } from 'lucide-react';
 import { Target, Package, Users, UserCircle, ScanText, ChevronDown, LogOut, Activity, Route, Sparkles, ShoppingCart } from 'lucide-react';
 import { supabase, hasValidSupabaseConfig } from './lib/supabase';
@@ -126,9 +126,13 @@ export default function App() {
   }, [userRole, loggedInVendor, currentVendorProfile, activeVendedorId]);
 
   const loadData = useCallback(async (force = false, showLoader = false) => {
+    if (!localStorage.getItem('dashboard_fdv_token')) {
+      setLoading(false);
+      return;
+    }
     if (showLoader) setLoading(true);
     try {
-      const targetVendor = (userRole === 'ADMIN' && activeVendedorId === 'ADMIN') ? undefined : activeVendedorId;
+      const targetVendor = userRole === 'ADMIN' ? undefined : (loggedInVendor || undefined);
       const [vol, act, metas] = await Promise.all([
         fetchVolumenData(force, targetVendor),
         fetchActivacionData(force, targetVendor),
@@ -142,7 +146,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [userRole, activeVendedorId]);
+  }, [userRole, loggedInVendor]);
 
   // Failsafe: nunca permitir que un loader bloquee la pantalla por más de 3 segundos
   useEffect(() => {
@@ -260,8 +264,8 @@ export default function App() {
       if (data?.token && data?.user) {
         saveAuthSession(data.token, data.user, initialRoute);
       }
+      clearSheetsCache();
       setIsLoggedIn(true);
-      loadData(true, true);
 
       if (hasValidSupabaseConfig) {
         supabase.from('trazabilidad_login').insert([{
@@ -282,6 +286,7 @@ export default function App() {
 
   const handleLogout = () => {
     clearAuthSession();
+    clearSheetsCache();
     setIsLoggedIn(false);
     setAuthUsuario('');
     setAuthPassword('');
@@ -289,6 +294,9 @@ export default function App() {
     setUserRole('VENDEDOR');
     setLoggedInVendor('');
     setActiveVendedorId('');
+    setVolumenData([]);
+    setActivacionData([]);
+    setMetasActivacion([]);
   };
 
   const handleRouteChange = (newRouteId: string) => {

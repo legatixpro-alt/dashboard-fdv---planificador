@@ -19,13 +19,14 @@ export default defineConfig(() => {
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
     build: {
-      chunkSizeWarningLimit: 600,
+      chunkSizeWarningLimit: 1500,
       rollupOptions: {
         output: {
           manualChunks: {
             'vendor-react': ['react', 'react-dom'],
-            'vendor-pdf': ['jspdf', 'jspdf-autotable', 'html2canvas'],
+            'vendor-pdf': ['jspdf', 'jspdf-autotable'],
             'vendor-firebase': ['firebase/app', 'firebase/firestore', 'firebase/auth'],
+            'vendor-supabase': ['@supabase/supabase-js'],
             'vendor-icons': ['lucide-react']
           }
         }

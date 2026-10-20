@@ -3,7 +3,13 @@ import { VolumenData, ActivacionData } from '../types';
 let memVolumen: { key: string; data: VolumenData[]; time: number } | null = null;
 let memActivacion: { key: string; data: any[]; time: number } | null = null;
 let memMetas: { key: string; data: any[]; time: number } | null = null;
-const MEM_TTL = 30000; // 30 seconds client-side cache
+const MEM_TTL = 60000; // 60 seconds client-side cache
+
+export const clearSheetsCache = (): void => {
+  memVolumen = null;
+  memActivacion = null;
+  memMetas = null;
+};
 
 export const getAuthHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('dashboard_fdv_token');

@@ -1,20 +1,46 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { spawn, ChildProcess } from 'child_process';
 
 describe('Integration: API Server Routes & Authentication Flow', () => {
   let baseUrl = 'http://localhost:3005';
   let adminToken: string = '';
   let vendorToken: string = '';
+  let spawnedServer: ChildProcess | null = null;
 
   beforeAll(async () => {
     // Dynamically locate the running server (port 3005 fallback to 3000)
+    let found = false;
     for (const port of [3005, 3000]) {
       try {
         const res = await fetch(`http://localhost:${port}/api/health`);
         if (res.ok) {
           baseUrl = `http://localhost:${port}`;
+          found = true;
           break;
         }
       } catch {}
+    }
+
+    if (!found) {
+      spawnedServer = spawn('node', ['dist/server.cjs'], {
+        env: { ...process.env, PORT: '3005' },
+        stdio: 'ignore'
+      });
+      baseUrl = 'http://localhost:3005';
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 250));
+        try {
+          const res = await fetch(`${baseUrl}/api/health`);
+          if (res.ok) break;
+        } catch {}
+      }
+    }
+  }, 15000);
+
+  afterAll(() => {
+    if (spawnedServer) {
+      spawnedServer.kill();
+      spawnedServer = null;
     }
   });
 
@@ -211,5 +237,45 @@ describe('Integration: API Server Routes & Authentication Flow', () => {
       expect(data.success).toBe(false);
       expect(data.error).toContain('JSON malformado');
     });
+  });
+
+  describe('Data Synchronization & Filtering Endpoints', () => {
+    it('GET /api/data/metas-activacion should return all vendor metas for ADMIN', async () => {
+      const res = await fetch(`${baseUrl}/api/data/metas-activacion`, {
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(50);
+    }, 15000);
+
+    it('GET /api/data/metas-activacion should resolve CONSOLIDATED vendor filter accurately', async () => {
+      const res = await fetch(`${baseUrl}/api/data/metas-activacion?vendedor=${encodeURIComponent('CONSOLIDATED:JUAN HERNANDEZ')}`, {
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      expect(data.every((m: any) => m.vendedorId === 'JUAN HERNANDEZ')).toBe(true);
+    }, 15000);
+
+    it('GET /api/data/activacion and /api/data/volumen should return synchronized data', async () => {
+      const [actRes, volRes] = await Promise.all([
+        fetch(`${baseUrl}/api/data/activacion?vendedor=${encodeURIComponent('CONSOLIDATED:JUAN HERNANDEZ')}`, {
+          headers: { Authorization: `Bearer ${adminToken}` }
+        }),
+        fetch(`${baseUrl}/api/data/volumen?vendedor=${encodeURIComponent('CONSOLIDATED:JUAN HERNANDEZ')}`, {
+          headers: { Authorization: `Bearer ${adminToken}` }
+        })
+      ]);
+      expect(actRes.status).toBe(200);
+      expect(volRes.status).toBe(200);
+      const actData = await actRes.json();
+      const volData = await volRes.json();
+      expect(actData.length).toBeGreaterThan(100);
+      expect(volData.length).toBeGreaterThan(10);
+    }, 15000);
   });
 });

@@ -2831,7 +2831,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
   let lastActivacionParsedTime = 0;
   let cachedMetasParsed: any[] | null = null;
   let lastMetasParsedTime = 0;
-  const PARSED_DATA_TTL = 30000; // 30 seconds
+  const PARSED_DATA_TTL = 60000; // 60 seconds
 
   app.get("/api/data/volumen", authenticateToken, async (req: any, res: any) => {
     try {
@@ -2842,13 +2842,14 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
 
       if (user.role === 'VENDEDOR') {
         const prof = getVendorProfile(user.username || '');
-        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         vendorFilter = (user.username || '').toUpperCase().trim();
       } else if (req.query.vendedor) {
-        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
-        if (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS') {
+        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, '').toUpperCase().trim();
+        if (rawParam && rawParam !== 'ADMIN' && rawParam !== 'TODOS' && rawParam !== 'ALL_MY_ROUTES') {
+          vendorFilter = rawParam;
           const prof = getVendorProfile(vendorFilter);
-          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         }
       }
 
@@ -2857,6 +2858,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         return list.filter(d => {
           const vNombre = (d.vendedorNombre || '').toUpperCase();
           const vId = (d.vendedorId || '').toUpperCase();
+          if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId) || matchesVendorAlias([vendorFilter, ...allowedAliases], vNombre)) {
+            return true;
+          }
           if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
             if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
           }
@@ -2867,26 +2871,17 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         });
       };
 
+      if (!force && cachedVolumenParsed && (Date.now() - lastVolumenParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedVolumenParsed));
+      }
+
       if (!force && supabase) {
         try {
-          const searchTerms = (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS')
-            ? Array.from(new Set([vendorFilter, ...allowedAliases]))
-                .filter(Boolean)
-                .map(t => t.trim())
-                .filter(t => t.length > 0 && !/^\d+$/.test(t))
-            : [];
-          const orClauses = searchTerms.flatMap(t => [
-            `vendedor_nombre.ilike.%${t}%`,
-            `vendedor_id.ilike.%${t}%`
-          ]).join(',');
-
           let supaRows: any[] = [];
           let from = 0;
           const pageSize = 1000;
           while (from < 10000) {
-            let q = supabase.from('ventas_volumen').select('*').range(from, from + pageSize - 1);
-            if (orClauses) q = q.or(orClauses);
-            const { data, error } = await q;
+            const { data, error } = await supabase.from('ventas_volumen').select('*').range(from, from + pageSize - 1);
             if (error || !data || data.length === 0) break;
             supaRows.push(...data);
             if (data.length < pageSize) break;
@@ -2913,13 +2908,11 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                 zona: r.zona || 'General'
               };
             });
-            return res.json(mapped);
+            cachedVolumenParsed = mapped;
+            lastVolumenParsedTime = Date.now();
+            return res.json(filterByVendor(mapped));
           }
         } catch (e) {}
-      }
-
-      if (!force && cachedVolumenParsed && (Date.now() - lastVolumenParsedTime < PARSED_DATA_TTL)) {
-        return res.json(filterByVendor(cachedVolumenParsed));
       }
 
       const workbook = await getWorkbook(force);
@@ -3029,13 +3022,14 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
 
       if (user.role === 'VENDEDOR') {
         const prof = getVendorProfile(user.username || '');
-        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+        allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         vendorFilter = (user.username || '').toUpperCase().trim();
       } else if (req.query.vendedor) {
-        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
-        if (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS') {
+        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, '').toUpperCase().trim();
+        if (rawParam && rawParam !== 'ADMIN' && rawParam !== 'TODOS' && rawParam !== 'ALL_MY_ROUTES') {
+          vendorFilter = rawParam;
           const prof = getVendorProfile(vendorFilter);
-          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases]);
+          allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         }
       }
 
@@ -3044,6 +3038,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         return list.filter(d => {
           const vNombre = (d.vendedorNombre || '').toUpperCase();
           const vId = (d.vendedorId || '').toUpperCase();
+          if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId) || matchesVendorAlias([vendorFilter, ...allowedAliases], vNombre)) {
+            return true;
+          }
           if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
             if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
           }
@@ -3054,26 +3051,17 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         });
       };
 
+      if (!force && cachedActivacionParsed && (Date.now() - lastActivacionParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedActivacionParsed));
+      }
+
       if (!force && supabase) {
         try {
-          const searchTerms = (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS')
-            ? Array.from(new Set([vendorFilter, ...allowedAliases]))
-                .filter(Boolean)
-                .map(t => t.trim())
-                .filter(t => t.length > 0 && !/^\d+$/.test(t))
-            : [];
-          const orClauses = searchTerms.flatMap(t => [
-            `vendedor_nombre.ilike.%${t}%`,
-            `vendedor_id.ilike.%${t}%`
-          ]).join(',');
-
           let supaRows: any[] = [];
           let from = 0;
           const pageSize = 1000;
           while (from < 10000) {
-            let q = supabase.from('activacion_clientes').select('*').range(from, from + pageSize - 1);
-            if (orClauses) q = q.or(orClauses);
-            const { data, error } = await q;
+            const { data, error } = await supabase.from('activacion_clientes').select('*').range(from, from + pageSize - 1);
             if (error || !data || data.length === 0) break;
             supaRows.push(...data);
             if (data.length < pageSize) break;
@@ -3101,13 +3089,11 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                 MORTADELA_SALPICAO: Boolean(r.has_mortadela_salpicao)
               }
             }));
-            return res.json(mapped);
+            cachedActivacionParsed = mapped;
+            lastActivacionParsedTime = Date.now();
+            return res.json(filterByVendor(mapped));
           }
         } catch (e) {}
-      }
-
-      if (!force && cachedActivacionParsed && (Date.now() - lastActivacionParsedTime < PARSED_DATA_TTL)) {
-        return res.json(filterByVendor(cachedActivacionParsed));
       }
 
       const workbook = await getWorkbook(force);
@@ -3133,9 +3119,14 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         for (let i = 1; i < rows.length; i++) {
           const r = rows[i] as any[];
           if (r && r[0] !== undefined && r[0] !== null && String(r[0]).trim() !== '') {
-            const id = String(r[0]).trim();
+            const rawCode = String(r[0]).trim();
+            const cleanCode = rawCode.replace(/^0+/, '') || rawCode;
             const cajas = parseFloat(r[2]) || 0;
-            clientMap.set(id, (clientMap.get(id) || 0) + (cajas > 0 ? cajas : 1));
+            const addVal = cajas > 0 ? cajas : 1;
+            clientMap.set(rawCode, (clientMap.get(rawCode) || 0) + addVal);
+            if (cleanCode !== rawCode) {
+              clientMap.set(cleanCode, (clientMap.get(cleanCode) || 0) + addVal);
+            }
           }
         }
         return clientMap;
@@ -3156,14 +3147,21 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           if (!row || row.length < 3 || !row[0]) continue;
           
           const codigo = String(row[0]).trim();
+          const cleanCodigo = codigo.replace(/^0+/, '') || codigo;
           const razonSocial = String(row[1] || '').trim();
           const vendedor = String(row[2] || '').replace(/\s+/g, ' ').trim();
           
-          const hasAceite = mapAceite.has(codigo) || (row[3] && String(row[3]).trim().toUpperCase() === 'SI');
-          const hasAzucar = mapAzucar.has(codigo) || (row[4] && String(row[4]).trim().toUpperCase() === 'SI');
-          const hasPollo = mapPollo.has(codigo) || (row[5] && String(row[5]).trim().toUpperCase() === 'SI');
-          const hasAsturias = mapAsturias.has(codigo) || (row[6] && String(row[6]).trim().toUpperCase() === 'SI');
-          const hasSalpicao = mapSalpicao.has(codigo) || (row[7] && String(row[7]).trim().toUpperCase() === 'SI');
+          const cAceite = mapAceite.get(codigo) || mapAceite.get(cleanCodigo) || 0;
+          const cAzucar = mapAzucar.get(codigo) || mapAzucar.get(cleanCodigo) || 0;
+          const cPollo = mapPollo.get(codigo) || mapPollo.get(cleanCodigo) || 0;
+          const cAsturias = mapAsturias.get(codigo) || mapAsturias.get(cleanCodigo) || 0;
+          const cSalpicao = mapSalpicao.get(codigo) || mapSalpicao.get(cleanCodigo) || 0;
+
+          const hasAceite = cAceite > 0 || Boolean(row[3] && String(row[3]).trim().toUpperCase() === 'SI');
+          const hasAzucar = cAzucar > 0 || Boolean(row[4] && String(row[4]).trim().toUpperCase() === 'SI');
+          const hasPollo = cPollo > 0 || Boolean(row[5] && String(row[5]).trim().toUpperCase() === 'SI');
+          const hasAsturias = cAsturias > 0 || Boolean(row[6] && String(row[6]).trim().toUpperCase() === 'SI');
+          const hasSalpicao = cSalpicao > 0 || Boolean(row[7] && String(row[7]).trim().toUpperCase() === 'SI');
 
           const isActivo = hasAceite || hasAzucar || hasPollo || hasAsturias || hasSalpicao;
           const vendedorUpper = vendedor.toUpperCase();
@@ -3182,21 +3180,21 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             cliente: razonSocial,
             status: isActivo ? 'ACTIVO' : 'INACTIVO',
             cats: {
-              ACEITE: hasAceite ? 1 : 0,
-              AZUCAR: hasAzucar ? 1 : 0,
-              POLLO: hasPollo ? 1 : 0,
-              ESTANDAR_ASTURIAS: hasAsturias ? 1 : 0,
-              MORTADELA_SALPICAO: hasSalpicao ? 1 : 0,
-              ARROZ: hasPollo ? 1 : 0,
-              ENTERO: hasAsturias ? 1 : 0,
-              LIGEROS: hasSalpicao ? 1 : 0,
+              ACEITE: hasAceite,
+              AZUCAR: hasAzucar,
+              POLLO: hasPollo,
+              ESTANDAR_ASTURIAS: hasAsturias,
+              MORTADELA_SALPICAO: hasSalpicao,
+              ARROZ: hasPollo,
+              ENTERO: hasAsturias,
+              LIGEROS: hasSalpicao,
             },
             cajas: {
-              ACEITE: mapAceite.get(codigo) || 0,
-              AZUCAR: mapAzucar.get(codigo) || 0,
-              POLLO: mapPollo.get(codigo) || 0,
-              ESTANDAR_ASTURIAS: mapAsturias.get(codigo) || 0,
-              MORTADELA_SALPICAO: mapSalpicao.get(codigo) || 0,
+              ACEITE: cAceite,
+              AZUCAR: cAzucar,
+              POLLO: cPollo,
+              ESTANDAR_ASTURIAS: cAsturias,
+              MORTADELA_SALPICAO: cSalpicao,
             }
           });
         }
@@ -3223,8 +3221,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         vendorFilter = (user.username || '').toUpperCase().trim();
       } else if (req.query.vendedor) {
-        vendorFilter = String(req.query.vendedor).toUpperCase().trim();
-        if (vendorFilter && vendorFilter !== 'ADMIN' && vendorFilter !== 'TODOS') {
+        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, '').toUpperCase().trim();
+        if (rawParam && rawParam !== 'ADMIN' && rawParam !== 'TODOS' && rawParam !== 'ALL_MY_ROUTES') {
+          vendorFilter = rawParam;
           const prof = getVendorProfile(vendorFilter);
           allowedAliases = prof.routes.flatMap(r => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
         }
@@ -3234,6 +3233,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         if (!vendorFilter || vendorFilter === 'ADMIN' || vendorFilter === 'TODOS') return list;
         return list.filter(d => {
           const vId = (d.vendedorId || '').toUpperCase();
+          if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId)) {
+            return true;
+          }
           if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
             if (vId.includes(vendorFilter) || vendorFilter.includes(vId)) return true;
           }
@@ -3243,6 +3245,10 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           });
         });
       };
+
+      if (!force && cachedMetasParsed && (Date.now() - lastMetasParsedTime < PARSED_DATA_TTL)) {
+        return res.json(filterByVendor(cachedMetasParsed));
+      }
 
       if (!force && supabase) {
         try {
@@ -3259,10 +3265,6 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             return res.json(filterByVendor(mapped));
           }
         } catch (e) {}
-      }
-
-      if (!force && cachedMetasParsed && (Date.now() - lastMetasParsedTime < PARSED_DATA_TTL)) {
-        return res.json(filterByVendor(cachedMetasParsed));
       }
 
       const workbook = await getWorkbook(force);
