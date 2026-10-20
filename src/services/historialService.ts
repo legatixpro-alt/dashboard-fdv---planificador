@@ -1,4 +1,5 @@
 import { getAuthHeaders } from './googleSheetsService';
+import { RubroCodigo } from '../lib/rubros';
 
 export interface HistPeriodo { ano: number; mes: number }
 
@@ -22,6 +23,98 @@ export interface HistClienteRow {
 export interface HistClienteDetalle {
   meses: { ano: number; mes: number; cliente: string; vendedor: string; cajas: Record<string, number>; kgs: number; monto: number }[];
   productos: { ano: number; mes: number; sku: string; articulo: string; rubro: string; cajas: number; kgs: number; monto: number }[];
+}
+
+export interface Rubro360Mes {
+  ano: number;
+  mes: number;
+  clientesActivados: number;
+  clientesEnCartera: number;
+  clientesFueraCartera: number;
+  porcentajeCartera: number;
+  variacionClientes: number | null;
+  variacionPct: number | null;
+  cajas: number;
+  unidades: number;
+  kgs: number;
+  monto: number;
+  skusActivos: number;
+  kgsPorCliente: number;
+  ticketPromedio: number;
+}
+
+export interface Rubro360Sku {
+  sku: string;
+  articulo: string;
+  totalCajas: number;
+  totalUnidades: number;
+  totalKgs: number;
+  totalMonto: number;
+  clientesUnicos: number;
+  mesesActivos: number;
+  porMes: Record<string, { cajas: number; kgs: number; monto: number; clientes: number }>;
+}
+
+export type EstadoClienteRubro360 =
+  | 'REACTIVADO_ESTE_MES'
+  | 'NUEVO_ESTE_MES'
+  | 'OPORTUNIDAD_RECUPERACION'
+  | 'SIN_HISTORIAL'
+  | 'FUERA_CARTERA';
+
+export interface Rubro360Cliente {
+  id: string;
+  cliente: string;
+  vendedor: string;
+  enCartera: boolean;
+  activoMesActual: boolean;
+  mesesActivados: number;
+  totalMesesDisponibles: number;
+  frecuenciaPct: number;
+  ultimoMesCompra: { ano: number; mes: number } | null;
+  totalCajas: number;
+  totalKgs: number;
+  totalMonto: number;
+  estado360: EstadoClienteRubro360;
+  porMes: Record<string, { cajas: number; kgs: number; monto: number; activo: boolean }>;
+}
+
+export interface Rubro360Data {
+  rubro: RubroCodigo;
+  periodos: HistPeriodo[];
+  carteraTotal: number;
+  activadosMesActual: number;
+  metaMesActual: number;
+  meses: Rubro360Mes[];
+  skus: Rubro360Sku[];
+  clientes: Rubro360Cliente[];
+  resumen: {
+    totalMeses: number;
+    promedioClientesMes: number;
+    promedioCajasMes: number;
+    promedioKgsMes: number;
+    promedioMontoMes: number;
+    mejorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number; monto: number } | null;
+    peorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number; monto: number } | null;
+    totalCajasHistorico: number;
+    totalKgsHistorico: number;
+    totalMontoHistorico: number;
+    clientesUnicosHistorico: number;
+    clientesHabituales: number;
+    oportunidadRecuperacion: number;
+    reactivadosEsteMes: number;
+    nuevosEsteMes: number;
+  };
+}
+
+export function categoryToRubroCode(cat: string): RubroCodigo {
+  const c = (cat || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  if (c.includes('ACEITE')) return 'ACEITE';
+  if (c.includes('AZUCAR')) return 'AZUCAR';
+  if (c.includes('POLLO') || c.includes('ARROZ')) return 'POLLO';
+  if (c.includes('ESTANDAR') || c.includes('SUPERIOR') || c.includes('ENTERO')) return 'ESTANDAR_ASTURIAS';
+  if (c.includes('MORTADELA') || c.includes('SALPICAO') || c.includes('LIGEROS')) return 'MORTADELA_SALPICAO';
+  return 'ACEITE';
 }
 
 export class HistorialError extends Error {
@@ -48,3 +141,5 @@ export const fetchHistClientes = (ano: number, mes: number, vendedor?: string) =
   getJSON<{ rows: HistClienteRow[] }>(`/api/historial/clientes?ano=${ano}&mes=${mes}&${v(vendedor)}`);
 export const fetchHistCliente = (id: string, vendedor?: string) =>
   getJSON<HistClienteDetalle>(`/api/historial/cliente/${encodeURIComponent(id)}?${v(vendedor)}`);
+export const fetchHistRubro360 = (rubro: RubroCodigo, vendedor?: string) =>
+  getJSON<Rubro360Data>(`/api/historial/rubro-360?rubro=${encodeURIComponent(rubro)}&${v(vendedor)}`);

@@ -1,15 +1,19 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import React, { useMemo, useState } from 'react';
-import { Target, Search, FileText, CheckCircle2, Droplets, Flame, Drumstick, Package as PkgIcon, Sparkles } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Target, Search, FileText, CheckCircle2, Droplets, Flame, Drumstick, Package as PkgIcon, Sparkles, CheckSquare, Square, Activity } from 'lucide-react';
 import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
+import { RubroCodigo } from '../lib/rubros';
+import { categoryToRubroCode } from '../services/historialService';
+import { RubroDashboard360 } from './RubroDashboard360';
 
 interface Props {
   filteredVolumen: VolumenData[];
   filteredActivacion: any[];
   metasActivacion?: any[];
   activeVendedorId: string;
+  vendedorFilter?: string;
 }
 
 interface CategoriaStats {
@@ -21,10 +25,25 @@ interface CategoriaStats {
   estCierre: number;
 }
 
-export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActivacion, metasActivacion, activeVendedorId }) => {
+export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActivacion, metasActivacion, activeVendedorId, vendedorFilter }) => {
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedRubro, setSelectedRubro] = useState<RubroCodigo | null>(null);
+  const dashboard360Ref = useRef<HTMLDivElement | null>(null);
   const mesInfo = useMemo(() => getMesLaboralInfo(), []);
+
+  const handleToggleRubro = (catOrCode: string | RubroCodigo, scrollToPanel = false) => {
+    const code = categoryToRubroCode(catOrCode);
+    setSelectedRubro((prev) => {
+      const next = prev === code ? null : code;
+      if (next && scrollToPanel) {
+        setTimeout(() => {
+          dashboard360Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 80);
+      }
+      return next;
+    });
+  };
 
   // Mapping categories to icons based on the new activation products
   const getIconForCategory = (cat: string) => {
@@ -171,26 +190,66 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
 
   const totalEstCierre = categoriaStats.reduce((acc, curr) => acc + curr.estCierre, 0);
 
+  const selectedCategoriaStat = useMemo(() => {
+    if (!selectedRubro) return undefined;
+    return categoriaStats.find(c => categoryToRubroCode(c.categoria) === selectedRubro);
+  }, [selectedRubro, categoriaStats]);
+
   return (
     <div className="space-y-6">
       
       {/* SECTION 1: WIDGETS (CARDS) */}
-      <div className="flex items-center gap-2 mb-2">
-        <CheckCircle2 className="w-5 h-5 text-red-600" />
-        <h2 className="text-sm font-sans font-bold text-white uppercase tracking-wider">
-          Rubros en Activación — Avance & Necesidad
-        </h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="w-5 h-5 text-red-600" />
+          <h2 className="text-sm font-sans font-bold text-white uppercase tracking-wider">
+            Rubros en Activación — Avance & Necesidad
+          </h2>
+        </div>
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-950/30 border border-red-900/40 text-red-300 text-xs font-sans">
+          <Activity className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          <span>Tilda cualquier rubro para abrir su <strong>Dashboard 360° Histórico</strong></span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-4 snap-x snap-mandatory overflow-x-auto scrollbar-hide pb-2" style={{ WebkitOverflowScrolling: 'touch' }}>
         {categoriaStats.map((stat, i) => {
           const isSuccess = stat.cumplimiento >= 100;
+          const rCode = categoryToRubroCode(stat.categoria);
+          const isSelected = selectedRubro === rCode;
           return (
-            <div key={i} className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 md:p-5 flex flex-col min-w-[260px] sm:min-w-0 snap-start shrink-0">
-              
+            <div
+              key={i}
+              role="button"
+              tabIndex={0}
+              onClick={() => handleToggleRubro(stat.categoria)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleToggleRubro(stat.categoria);
+                }
+              }}
+              className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[260px] sm:min-w-0 snap-start shrink-0 cursor-pointer transition-all select-none ${
+                isSelected
+                  ? 'border-2 border-red-500 ring-2 ring-red-500/20 bg-gradient-to-b from-red-950/20 to-neutral-950 shadow-lg shadow-red-950/30'
+                  : 'border border-neutral-800 hover:border-neutral-600 hover:bg-neutral-900/40'
+              }`}
+            >
               <div className="flex justify-between items-start mb-3">
-                <div className={`p-2 rounded-lg border ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/20' : 'border-amber-900/50 bg-amber-950/20'}`}>
-                  {getIconForCategory(stat.categoria)}
+                <div className="flex items-center gap-2">
+                  <div className={`p-2 rounded-lg border ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/20' : 'border-amber-900/50 bg-amber-950/20'}`}>
+                    {getIconForCategory(stat.categoria)}
+                  </div>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-bold border transition-colors ${
+                      isSelected
+                        ? 'bg-red-600 text-white border-red-500'
+                        : 'bg-neutral-900 text-neutral-400 border-neutral-800'
+                    }`}
+                  >
+                    {isSelected ? <CheckSquare className="w-3 h-3" /> : <Square className="w-3 h-3" />}
+                    {isSelected ? '360° Activo' : 'Tildar 360°'}
+                  </span>
                 </div>
                 <div className={`text-xs font-mono font-bold px-2 py-1 rounded border ${
                   isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-amber-900/50 bg-amber-950/40 text-amber-400'
@@ -231,6 +290,21 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
         })}
       </div>
 
+      {/* DASHBOARD 360° DEL RUBRO TILDADO */}
+      {selectedRubro && (
+        <div ref={dashboard360Ref} className="animate-in fade-in slide-in-from-top-2 duration-300">
+          <RubroDashboard360
+            selectedRubro={selectedRubro}
+            onSelectRubro={(code) => setSelectedRubro(code)}
+            onClose={() => setSelectedRubro(null)}
+            vendedorFilter={vendedorFilter || activeVendedorId}
+            vendedorDisplayName={activeVendedorId}
+            currentStats={selectedCategoriaStat}
+            filteredVolumen={filteredVolumen}
+          />
+        </div>
+      )}
+
       {/* SECTION 2: DATA TABLE */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
         
@@ -240,9 +314,14 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
             <div className="bg-red-600 p-1.5 rounded">
                <FileText className="w-4 h-4 text-white" />
             </div>
-            <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
-              Activación por Categoría
-            </h2>
+            <div>
+              <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
+                Activación por Categoría
+              </h2>
+              <p className="text-[11px] font-sans text-neutral-400">
+                Haz clic o tilda cualquier fila para desplegar el historial de ventas 360° de ese rubro.
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto">
@@ -264,26 +343,48 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
 
         {/* Responsive Table Wrapper */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[800px]">
+          <table className="w-full text-left border-collapse min-w-[850px]">
             <thead>
               <tr className="bg-neutral-900/50 border-b border-neutral-800 text-[10px] md:text-xs font-sans text-neutral-400 uppercase tracking-wider">
-                <th className="p-3 md:p-4 text-center w-12 border-r border-neutral-800">#</th>
-                <th className="p-3 md:p-4 font-bold text-white border-r border-neutral-800">Categoría</th>
+                <th className="p-3 md:p-4 text-center w-14 border-r border-neutral-800">360°</th>
+                <th className="p-3 md:p-4 font-bold text-white border-r border-neutral-800">Categoría / Rubro</th>
                 <th className="p-3 md:p-4 text-center border-r border-neutral-800">Meta</th>
                 <th className="p-3 md:p-4 text-center text-emerald-400 border-r border-neutral-800">Activados</th>
                 <th className="p-3 md:p-4 text-center text-red-400 border-r border-neutral-800">Faltante</th>
                 <th className="p-3 md:p-4 text-center border-r border-neutral-800">% Cumpl.</th>
                 <th className="p-3 md:p-4 border-r border-neutral-800">Estado</th>
-                <th className="p-3 md:p-4 text-center text-amber-400">Est. Cierre</th>
+                <th className="p-3 md:p-4 text-center text-amber-400 border-r border-neutral-800">Est. Cierre</th>
+                <th className="p-3 md:p-4 text-center">Historial</th>
               </tr>
             </thead>
             <tbody className="text-xs md:text-sm font-mono text-neutral-300">
-              {filteredStats.map((stat, idx) => {
+              {filteredStats.map((stat) => {
                  const isSuccess = stat.cumplimiento >= 100;
+                 const rCode = categoryToRubroCode(stat.categoria);
+                 const isSelected = selectedRubro === rCode;
                  return (
-                  <tr key={stat.categoria} className="border-b border-neutral-800 hover:bg-neutral-900/50 transition-colors">
-                    <td className="p-3 md:p-4 text-center border-r border-neutral-800 text-neutral-500">{idx + 1}</td>
-                    <td className="p-3 md:p-4 font-sans font-bold text-white border-r border-neutral-800">{stat.categoria}</td>
+                  <tr
+                    key={stat.categoria}
+                    onClick={() => handleToggleRubro(stat.categoria, true)}
+                    className={`border-b border-neutral-800 cursor-pointer transition-colors ${
+                      isSelected ? 'bg-red-950/20 hover:bg-red-950/30' : 'hover:bg-neutral-900/50'
+                    }`}
+                  >
+                    <td className="p-3 md:p-4 text-center border-r border-neutral-800">
+                      <div className="inline-flex items-center justify-center">
+                        {isSelected ? (
+                          <CheckSquare className="w-4 h-4 text-red-500" />
+                        ) : (
+                          <Square className="w-4 h-4 text-neutral-500 hover:text-white" />
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3 md:p-4 font-sans font-bold text-white border-r border-neutral-800">
+                      <div className="flex items-center gap-2">
+                        {getIconForCategory(stat.categoria)}
+                        <span>{stat.categoria}</span>
+                      </div>
+                    </td>
                     <td className="p-3 md:p-4 text-center border-r border-neutral-800">{stat.meta}</td>
                     <td className="p-3 md:p-4 text-center text-emerald-400 font-bold border-r border-neutral-800">{stat.activados}</td>
                     <td className="p-3 md:p-4 text-center border-r border-neutral-800">{stat.faltante}</td>
@@ -300,8 +401,20 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
                         </span>
                       </div>
                     </td>
-                    <td className="p-3 md:p-4 text-center font-bold text-amber-400">
+                    <td className="p-3 md:p-4 text-center font-bold text-amber-400 border-r border-neutral-800">
                       {stat.estCierre} cli
+                    </td>
+                    <td className="p-3 md:p-4 text-center font-sans">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                          isSelected
+                            ? 'bg-red-600 text-white border-red-500'
+                            : 'bg-neutral-900 text-neutral-300 border-neutral-700 hover:border-red-500 hover:text-red-300'
+                        }`}
+                      >
+                        <Activity className="w-3 h-3" />
+                        {isSelected ? 'Ocultar 360°' : 'Ver 360°'}
+                      </span>
                     </td>
                   </tr>
                  );
@@ -327,8 +440,11 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
                     </span>
                   </div>
                 </td>
-                <td className="p-3 md:p-4 text-center text-amber-400">
+                <td className="p-3 md:p-4 text-center text-amber-400 border-r border-neutral-800">
                   {totalEstCierre} cli
+                </td>
+                <td className="p-3 md:p-4 text-center text-neutral-500 font-sans text-[10px]">
+                  5 Rubros
                 </td>
               </tr>
             </tbody>

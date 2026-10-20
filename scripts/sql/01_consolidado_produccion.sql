@@ -98,15 +98,15 @@ SELECT
   COALESCE(SUM(cajas) FILTER (WHERE rubro = 'ACEITE'), 0)                        AS cajas_aceite,
   COALESCE(SUM(cajas) FILTER (WHERE rubro = 'AZUCAR'), 0)                        AS cajas_azucar,
   COALESCE(SUM(cajas) FILTER (WHERE rubro = 'POLLO'), 0)                         AS cajas_pollo,
-  COALESCE(SUM(cajas) FILTER (WHERE rubro = 'ESTANDAR Y SUPERIOR ASTURIAS'), 0)  AS cajas_estandar_asturias,
-  COALESCE(SUM(cajas) FILTER (WHERE rubro = 'MORTADELA SALPICAO Y ASTURIAS'), 0)AS cajas_mortadela_salpicao,
+  COALESCE(SUM(cajas) FILTER (WHERE rubro IN ('ESTANDAR_ASTURIAS', 'ESTANDAR Y SUPERIOR ASTURIAS')), 0)  AS cajas_estandar_asturias,
+  COALESCE(SUM(cajas) FILTER (WHERE rubro IN ('MORTADELA_SALPICAO', 'MORTADELA SALPICAO Y ASTURIAS')), 0) AS cajas_mortadela_salpicao,
   COALESCE(SUM(kgs), 0)                                                          AS kgs_total,
   COALESCE(SUM(monto), 0)                                                        AS monto_total,
   BOOL_OR(rubro = 'ACEITE'                         AND cajas > 0)                AS has_aceite,
   BOOL_OR(rubro = 'AZUCAR'                         AND cajas > 0)                AS has_azucar,
   BOOL_OR(rubro = 'POLLO'                          AND cajas > 0)                AS has_pollo,
-  BOOL_OR(rubro = 'ESTANDAR Y SUPERIOR ASTURIAS'   AND cajas > 0)                AS has_estandar_asturias,
-  BOOL_OR(rubro = 'MORTADELA SALPICAO Y ASTURIAS' AND cajas > 0)                AS has_mortadela_salpicao
+  BOOL_OR(rubro IN ('ESTANDAR_ASTURIAS', 'ESTANDAR Y SUPERIOR ASTURIAS')   AND cajas > 0) AS has_estandar_asturias,
+  BOOL_OR(rubro IN ('MORTADELA_SALPICAO', 'MORTADELA SALPICAO Y ASTURIAS') AND cajas > 0) AS has_mortadela_salpicao
 FROM public.ventas_historial
 GROUP BY ano, mes, id_cliente, cliente, vendedor;
 

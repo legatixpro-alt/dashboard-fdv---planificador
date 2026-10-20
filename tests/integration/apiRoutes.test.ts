@@ -277,5 +277,23 @@ describe('Integration: API Server Routes & Authentication Flow', () => {
       expect(actData.length).toBeGreaterThan(100);
       expect(volData.length).toBeGreaterThan(10);
     }, 15000);
+
+    it('GET /api/historial/rubro-360 should return real 360 historical dashboard data for a rubro and vendor', async () => {
+      const res = await fetch(
+        `${baseUrl}/api/historial/rubro-360?rubro=AZUCAR&vendedor=${encodeURIComponent('CONSOLIDATED:JUAN HERNANDEZ')}`,
+        { headers: { Authorization: `Bearer ${adminToken}` } }
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.rubro).toBe('AZUCAR');
+      expect(Array.isArray(data.meses)).toBe(true);
+      expect(data.meses.length).toBeGreaterThanOrEqual(8);
+      expect(Array.isArray(data.skus)).toBe(true);
+      expect(data.skus.length).toBeGreaterThan(0);
+      expect(Array.isArray(data.clientes)).toBe(true);
+      expect(data.clientes.length).toBeGreaterThan(0);
+      expect(data.resumen.totalKgsHistorico).toBeGreaterThan(0);
+      expect(data.resumen.mejorMes).not.toBeNull();
+    }, 20000);
   });
 });

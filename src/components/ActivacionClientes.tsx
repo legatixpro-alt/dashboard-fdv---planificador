@@ -1,19 +1,36 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
-import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2, TriangleAlert, User, LayoutList, FileText, Grip, Zap } from 'lucide-react';
+import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2, TriangleAlert, User, LayoutList, FileText, Grip, Zap, Activity, CheckSquare, Square } from 'lucide-react';
+import { RUBROS_ACTIVACION, RUBRO_LABEL, RubroCodigo } from '../lib/rubros';
+import { RubroDashboard360, getRubroTheme } from './RubroDashboard360';
 
 interface Props {
   filteredVolumen: any[];
   filteredActivacion: any[];
   activeVendedorId: string;
+  vendedorFilter?: string;
 }
 
-export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredActivacion, activeVendedorId }) => {
+export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredActivacion, activeVendedorId, vendedorFilter }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
+  const [selectedRubro, setSelectedRubro] = useState<RubroCodigo | null>(null);
+  const dashboard360Ref = useRef<HTMLDivElement | null>(null);
+
+  const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
+    setSelectedRubro((prev) => {
+      const next = prev === rubro ? null : rubro;
+      if (next && scrollTo) {
+        setTimeout(() => {
+          dashboard360Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 80);
+      }
+      return next;
+    });
+  };
   
   // Cálculos dinámicos basados en clientes únicos y sus rubros
   const { 
@@ -505,15 +522,56 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
       {/* SECTION 3: DETALLE DE COBERTURA POR CLIENTE */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
-         <div className="p-4 md:p-5 border-b border-neutral-800 flex items-center justify-between gap-4">
+         <div className="p-4 md:p-5 border-b border-neutral-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
            <div className="flex items-center gap-2">
              <LayoutList className="w-4 h-4 text-white bg-red-600 p-1 box-content rounded" />
-             <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
-               Detalle de Cobertura por Cliente
-             </h2>
+             <div>
+               <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
+                 Detalle de Cobertura por Cliente
+               </h2>
+               <p className="text-[11px] font-sans text-neutral-400">
+                 Tilda cualquier rubro para desplegar su <strong>Dashboard 360° Histórico de Ventas y Activación</strong>.
+               </p>
+             </div>
            </div>
-           
+
+           {/* Barra rápida de rubros para tildar el Dashboard 360° */}
+           <div className="flex flex-wrap items-center gap-1.5">
+             {RUBROS_ACTIVACION.map((rCode) => {
+               const active = selectedRubro === rCode;
+               const rTheme = getRubroTheme(rCode);
+               const IconComp = rTheme.icon;
+               return (
+                 <button
+                   key={rCode}
+                   onClick={() => toggleRubro360(rCode, true)}
+                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-sans font-bold border transition-all cursor-pointer ${
+                     active
+                       ? `${rTheme.badgeCls} shadow ring-1 ring-white/10`
+                       : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:text-white hover:border-neutral-600'
+                   }`}
+                 >
+                   {active ? <CheckSquare className="w-3.5 h-3.5 text-red-400" /> : <Square className="w-3.5 h-3.5 opacity-60" />}
+                   <IconComp className="w-3.5 h-3.5" />
+                   <span>{RUBRO_LABEL[rCode]}</span>
+                 </button>
+               );
+             })}
+           </div>
          </div>
+
+         {selectedRubro && (
+           <div ref={dashboard360Ref} className="p-4 border-b border-neutral-800 bg-black/50 animate-in fade-in slide-in-from-top-2 duration-300">
+             <RubroDashboard360
+               selectedRubro={selectedRubro}
+               onSelectRubro={(code) => setSelectedRubro(code)}
+               onClose={() => setSelectedRubro(null)}
+               vendedorFilter={vendedorFilter || activeVendedorId}
+               vendedorDisplayName={activeVendedorId}
+               filteredVolumen={filteredVolumen}
+             />
+           </div>
+         )}
 
          {/* Desktop View: Table */}
          {viewMode !== 'tarjetas' && (<div className="hidden md:block overflow-x-auto">
@@ -522,11 +580,21 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  <tr className="bg-[#b90000] text-[10px] font-sans text-white uppercase tracking-wider">
                    <th className="p-3 font-bold border-r border-[#a00000] w-20 text-center">Codigo</th>
                    <th className="p-3 font-bold border-r border-[#a00000]">Razon Social</th>
-                   <th className="p-3 font-bold text-center border-r border-[#a00000] w-24">Aceite</th>
-                   <th className="p-3 font-bold text-center border-r border-[#a00000] w-24">Azúcar</th>
-                   <th className="p-3 font-bold text-center border-r border-[#a00000] w-24">Pollo</th>
-                   <th className="p-3 font-bold text-center border-r border-[#a00000] min-w-[120px]">Est. y Sup. Asturias</th>
-                   <th className="p-3 font-bold text-center border-r border-[#a00000] min-w-[130px]">Mort. Salpicao y Asturias</th>
+                   <th onClick={() => toggleRubro360('ACEITE', true)} title="Tildar para ver Historial 360° de Aceite" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                     <span className="inline-flex items-center gap-1">{selectedRubro === 'ACEITE' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Aceite</span>
+                   </th>
+                   <th onClick={() => toggleRubro360('AZUCAR', true)} title="Tildar para ver Historial 360° de Azúcar" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                     <span className="inline-flex items-center gap-1">{selectedRubro === 'AZUCAR' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Azúcar</span>
+                   </th>
+                   <th onClick={() => toggleRubro360('POLLO', true)} title="Tildar para ver Historial 360° de Pollo" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                     <span className="inline-flex items-center gap-1">{selectedRubro === 'POLLO' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Pollo</span>
+                   </th>
+                   <th onClick={() => toggleRubro360('ESTANDAR_ASTURIAS', true)} title="Tildar para ver Historial 360° de Est. y Sup. Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[120px] cursor-pointer hover:bg-red-800 transition-colors">
+                     <span className="inline-flex items-center gap-1">{selectedRubro === 'ESTANDAR_ASTURIAS' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Est. y Sup. Asturias</span>
+                   </th>
+                   <th onClick={() => toggleRubro360('MORTADELA_SALPICAO', true)} title="Tildar para ver Historial 360° de Mort. Salpicao y Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[130px] cursor-pointer hover:bg-red-800 transition-colors">
+                     <span className="inline-flex items-center gap-1">{selectedRubro === 'MORTADELA_SALPICAO' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Mort. Salpicao y Asturias</span>
+                   </th>
                    <th className="p-3 font-bold text-center w-32">Cobertura</th>
                  </tr>
               </thead>
@@ -544,10 +612,10 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 ) : (
                   displayedClients.map((client, idx) => {
                     const bgClass = idx % 2 === 0 ? 'bg-[#141414]' : 'bg-[#0a0a0a]';
-                    const getCell = (has: boolean) => has ? (
-                       <td className="p-3 text-center border-r border-neutral-800/50 bg-emerald-950/20 text-emerald-400 font-bold">SI</td>
+                    const getCell = (has: boolean, rCode: RubroCodigo) => has ? (
+                       <td onClick={() => toggleRubro360(rCode, true)} title={`Ver Dashboard 360° de ${RUBRO_LABEL[rCode]}`} className="p-3 text-center border-r border-neutral-800/50 bg-emerald-950/20 text-emerald-400 font-bold cursor-pointer hover:bg-emerald-900/30 transition-colors">SI</td>
                     ) : (
-                       <td className="p-3 text-center border-r border-neutral-800/50 bg-neutral-900/40 text-neutral-600 font-bold">-</td>
+                       <td onClick={() => toggleRubro360(rCode, true)} title={`Ver Dashboard 360° de ${RUBRO_LABEL[rCode]}`} className="p-3 text-center border-r border-neutral-800/50 bg-neutral-900/40 text-neutral-600 font-bold cursor-pointer hover:bg-neutral-800/50 transition-colors">-</td>
                     );
 
                     let badgeColor = 'border-red-900/50 bg-red-950/40 text-red-400';
@@ -560,11 +628,11 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                        <tr key={idx} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
                           <td className="p-3 border-r border-neutral-800/50 text-white font-sans text-center font-bold">{client.codigo}</td>
                           <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase">{client.razonSocial}</td>
-                          {getCell(client.hasAceite)}
-                          {getCell(client.hasAzucar)}
-                          {getCell(client.hasPollo)}
-                          {getCell(client.hasEstandarAsturias)}
-                          {getCell(client.hasMortadelaSalpicao)}
+                          {getCell(client.hasAceite, 'ACEITE')}
+                          {getCell(client.hasAzucar, 'AZUCAR')}
+                          {getCell(client.hasPollo, 'POLLO')}
+                          {getCell(client.hasEstandarAsturias, 'ESTANDAR_ASTURIAS')}
+                          {getCell(client.hasMortadelaSalpicao, 'MORTADELA_SALPICAO')}
                           <td className="p-3 text-center">
                              <span className={`inline-block px-2 py-1 rounded-full border text-[10px] font-bold ${badgeColor}`}>
                                 {client.cobertura}/5 ({percentage}%)
@@ -579,7 +647,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
          </div>)}
          {/* Mobile View: Cards */}
          <div className={`flex flex-col p-3 gap-3 bg-neutral-950 ${viewMode !== 'tarjetas' ? 'md:hidden' : 'md:grid md:grid-cols-2 lg:grid-cols-3'}`}>
-            <div className="text-[10px] font-sans text-neutral-500 uppercase tracking-wider mb-1 px-1">Desglose por Cliente</div>
+            <div className="text-[10px] font-sans text-neutral-500 uppercase tracking-wider mb-1 px-1">Desglose por Cliente (Tilda un rubro para ver su historial 360°)</div>
             
             {displayedClients.length === 0 ? (
               <div className="col-span-full p-8 text-center bg-neutral-900/40 border border-neutral-800 rounded-xl text-neutral-400">
@@ -596,14 +664,14 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                else if (client.cobertura >= 3) badgeColor = 'border-amber-900/50 bg-amber-950/40 text-amber-400';
                const percentage = client.cobertura * 20;
 
-               const getPill = (name: string, has: boolean) => has ? (
-                  <div className="bg-emerald-950/30 border border-emerald-900/50 text-emerald-400 text-[9px] font-bold px-2 py-1 rounded">
+               const getPill = (name: string, has: boolean, rCode: RubroCodigo) => has ? (
+                  <button type="button" onClick={() => toggleRubro360(rCode, true)} className="bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-900/50 text-emerald-400 text-[9px] font-bold px-2 py-1 rounded cursor-pointer transition-colors">
                      {name}
-                  </div>
+                  </button>
                ) : (
-                  <div className="bg-neutral-900/50 border border-neutral-800 text-neutral-600 text-[9px] font-bold px-2 py-1 rounded line-through">
+                  <button type="button" onClick={() => toggleRubro360(rCode, true)} className="bg-neutral-900/50 hover:bg-neutral-800 border border-neutral-800 text-neutral-600 text-[9px] font-bold px-2 py-1 rounded line-through cursor-pointer transition-colors">
                      {name}
-                  </div>
+                  </button>
                );
 
                return (
@@ -620,11 +688,11 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      </h4>
                      
                      <div className="flex flex-wrap gap-1.5 border-t border-neutral-800 pt-3 mt-2">
-                         {getPill('ACEITE', client.hasAceite)}
-                         {getPill('AZÚCAR', client.hasAzucar)}
-                         {getPill('POLLO', client.hasPollo)}
-                         {getPill('EST. ASTURIAS', client.hasEstandarAsturias)}
-                         {getPill('MORT. SALPICAO', client.hasMortadelaSalpicao)}
+                         {getPill('ACEITE', client.hasAceite, 'ACEITE')}
+                         {getPill('AZÚCAR', client.hasAzucar, 'AZUCAR')}
+                         {getPill('POLLO', client.hasPollo, 'POLLO')}
+                         {getPill('EST. ASTURIAS', client.hasEstandarAsturias, 'ESTANDAR_ASTURIAS')}
+                         {getPill('MORT. SALPICAO', client.hasMortadelaSalpicao, 'MORTADELA_SALPICAO')}
                      </div>
                   </div>
                );

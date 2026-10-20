@@ -771,6 +771,7 @@ export default function App() {
                 filteredActivacion={filteredActivacion} 
                 metasActivacion={filteredMetas}
                 activeVendedorId={activeVendedorDisplayName}
+                vendedorFilter={activeVendedorId}
               />
             )}
             {activeTab === 'VOLUMEN' && (
@@ -784,6 +785,7 @@ export default function App() {
                 filteredVolumen={filteredVolumen} 
                 filteredActivacion={filteredActivacion} 
                 activeVendedorId={activeVendedorDisplayName}
+                vendedorFilter={activeVendedorId}
               />
             )}
             {activeTab === 'COBROS_OCR' && (

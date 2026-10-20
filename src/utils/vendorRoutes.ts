@@ -29,7 +29,7 @@ export const VENDOR_PROFILES: Record<string, VendorProfile> = {
     canonicalUsername: 'MARIA BRICEÑO',
     displayName: 'María Briceño',
     routes: [
-      { id: 'MARIA BRICEÑO', label: 'Ruta María Briceño', aliases: ['MARIA BRICEÑO'] }
+      { id: 'MARIA BRICEÑO', label: 'Ruta María Briceño', aliases: ['MARIA BRICEÑO', 'MARIA BRICENO', 'MARIA BRICEÃ‘O'] }
     ]
   },
   'MARIANA CHACIN': {
@@ -195,7 +195,7 @@ export const VENDOR_PROFILES: Record<string, VendorProfile> = {
     canonicalUsername: 'EDUARDO PIÑA',
     displayName: 'Eduardo Piña',
     routes: [
-      { id: 'EDUARDO PIÑA', label: 'Ruta Eduardo Piña', aliases: ['EDUARDO PIÑA'] }
+      { id: 'EDUARDO PIÑA', label: 'Ruta Eduardo Piña', aliases: ['EDUARDO PIÑA', 'EDUARDO PINA', 'EDUARDO PIÃ‘A'] }
     ]
   },
   'LEONARDO RIOS': {

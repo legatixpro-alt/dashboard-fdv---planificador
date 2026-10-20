@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { clasificarRubro, RUBROS_CLAVE, RUBRO_LABEL, RubroCodigo } from '../../src/lib/rubros';
+import { clasificarRubro, RUBROS_CLAVE, RUBROS_ACTIVACION, RUBRO_LABEL, RubroCodigo } from '../../src/lib/rubros';
+import { categoryToRubroCode } from '../../src/services/historialService';
 
 describe('Unit: clasificarRubro & Rubros Constants', () => {
   describe('Happy Paths - Categorization by SKU and Name', () => {
@@ -95,6 +96,16 @@ describe('Unit: clasificarRubro & Rubros Constants', () => {
         expect(typeof RUBRO_LABEL[code]).toBe('string');
         expect(RUBRO_LABEL[code].length).toBeGreaterThan(0);
       });
+    });
+
+    it('categoryToRubroCode should normalize all 5 activation display categories to canonical RubroCodigo', () => {
+      expect(categoryToRubroCode('ACEITE')).toBe('ACEITE');
+      expect(categoryToRubroCode('AZÚCAR')).toBe('AZUCAR');
+      expect(categoryToRubroCode('AZUCAR')).toBe('AZUCAR');
+      expect(categoryToRubroCode('POLLO')).toBe('POLLO');
+      expect(categoryToRubroCode('ESTANDAR Y SUPERIOR ASTURIAS')).toBe('ESTANDAR_ASTURIAS');
+      expect(categoryToRubroCode('MORTADELA SALPICAO Y ASTURIAS')).toBe('MORTADELA_SALPICAO');
+      expect(RUBROS_ACTIVACION).toEqual(['ACEITE', 'AZUCAR', 'POLLO', 'ESTANDAR_ASTURIAS', 'MORTADELA_SALPICAO']);
     });
   });
 });

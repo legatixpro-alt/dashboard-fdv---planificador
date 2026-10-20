@@ -75,7 +75,7 @@ var VENDOR_PROFILES = {
     canonicalUsername: "MARIA BRICE\xD1O",
     displayName: "Mar\xEDa Brice\xF1o",
     routes: [
-      { id: "MARIA BRICE\xD1O", label: "Ruta Mar\xEDa Brice\xF1o", aliases: ["MARIA BRICE\xD1O"] }
+      { id: "MARIA BRICE\xD1O", label: "Ruta Mar\xEDa Brice\xF1o", aliases: ["MARIA BRICE\xD1O", "MARIA BRICENO", "MARIA BRICE\xC3\u2018O"] }
     ]
   },
   "MARIANA CHACIN": {
@@ -241,7 +241,7 @@ var VENDOR_PROFILES = {
     canonicalUsername: "EDUARDO PI\xD1A",
     displayName: "Eduardo Pi\xF1a",
     routes: [
-      { id: "EDUARDO PI\xD1A", label: "Ruta Eduardo Pi\xF1a", aliases: ["EDUARDO PI\xD1A"] }
+      { id: "EDUARDO PI\xD1A", label: "Ruta Eduardo Pi\xF1a", aliases: ["EDUARDO PI\xD1A", "EDUARDO PINA", "EDUARDO PI\xC3\u2018A"] }
     ]
   },
   "LEONARDO RIOS": {
@@ -2496,7 +2496,17 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       res.status(500).json({ success: false, error: "Error sincronizando datos de Google Sheets", details: err?.message });
     }
   });
-  const normHist = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const normHist = (s) => String(s || "").replace(/Ã‘|Ã±/g, "N").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const normalizeHistRubroCode = (raw) => {
+    const s = normHist(raw);
+    if (!s) return null;
+    if (s.includes("ACEITE")) return "ACEITE";
+    if (s.includes("AZUCAR")) return "AZUCAR";
+    if (s.includes("POLLO") || s.includes("ARROZ")) return "POLLO";
+    if (s.includes("ESTANDAR") || s.includes("SUPERIOR") || s.includes("ENTERO")) return "ESTANDAR_ASTURIAS";
+    if (s.includes("MORTADELA") || s.includes("SALPICAO") || s.includes("LIGEROS")) return "MORTADELA_SALPICAO";
+    return null;
+  };
   const histFail = (res, e) => {
     const msg = String(e?.message || e || "");
     if (/does not exist|schema cache|Could not find the (table|relation)/i.test(msg)) {
@@ -2649,10 +2659,33 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           m.activos.POLLO += nz(r.act_pollo);
           m.activos.ESTANDAR_ASTURIAS += nz(r.act_estandar_asturias);
           m.activos.MORTADELA_SALPICAO += nz(r.act_mortadela_salpicao);
-          m.activos.TOTAL += nz(r.act_total);
-          m.clientesConMovimiento += nz(r.clientes_con_movimiento);
+          m.activos.TOTAL += nz(r.act_total ?? r.clientes_con_compra);
+          m.clientesConMovimiento += nz(r.clientes_con_movimiento ?? r.clientes_con_compra);
           m.fueraCartera += nz(r.clientes_fuera_cartera);
         });
+        const needsEmFix = [...meses.values()].every(
+          (m) => m.activos.ESTANDAR_ASTURIAS === 0 && m.activos.MORTADELA_SALPICAO === 0 && ((m.cajas.ESTANDAR_ASTURIAS || 0) > 0 || (m.cajas.MORTADELA_SALPICAO || 0) > 0)
+        );
+        if (needsEmFix) {
+          const emRows = await histFetchAll((a, b) => {
+            let q = supabase.from("ventas_historial").select("ano,mes,id_cliente,rubro,cajas").in("rubro", ["ESTANDAR_ASTURIAS", "MORTADELA_SALPICAO"]);
+            if (!scope.all) q = q.in("vendedor", scope.names);
+            return q.order("ano").order("mes").order("id_cliente").order("id_articulo").range(a, b);
+          });
+          const byMesRubCli = /* @__PURE__ */ new Map();
+          emRows.forEach((r) => {
+            const k = `${r.ano}|${r.mes}|${r.rubro}|${String(r.id_cliente || "").replace(/^0+/, "")}`;
+            byMesRubCli.set(k, (byMesRubCli.get(k) || 0) + nz(r.cajas));
+          });
+          byMesRubCli.forEach((cajasSum, key) => {
+            if (cajasSum <= 0) return;
+            const [anoS, mesS, rub] = key.split("|");
+            const m = mesRow(Number(anoS), Number(mesS));
+            if (rub === "ESTANDAR_ASTURIAS" || rub === "MORTADELA_SALPICAO") {
+              m.activos[rub] = (m.activos[rub] || 0) + 1;
+            }
+          });
+        }
         const cart = await histFetchAll((a, b) => supabase.from("activacion_clientes").select("cliente_codigo,vendedor_nombre").order("id").range(a, b));
         const allowed = new Set(scope.names.map(normHist));
         const seen = /* @__PURE__ */ new Set();
@@ -2679,26 +2712,55 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const scope = await histResolveScope(req);
       if (!scope.all && scope.names.length === 0) return res.json({ rows: [] });
       const rows = await histCached(`cli:${ano}:${mes}:${scopeKey(scope)}`, async () => {
-        const data = await histFetchAll((a, b) => {
-          let q = supabase.from("hist_activacion_cliente_mes").select("*").eq("ano", ano).eq("mes", mes);
-          if (!scope.all) q = q.in("vendedor", scope.names);
-          return q.order("id_cliente").range(a, b);
+        const [data, emData, cart] = await Promise.all([
+          histFetchAll((a, b) => {
+            let q = supabase.from("hist_activacion_cliente_mes").select("*").eq("ano", ano).eq("mes", mes);
+            if (!scope.all) q = q.in("vendedor", scope.names);
+            return q.order("id_cliente").range(a, b);
+          }),
+          histFetchAll((a, b) => {
+            let q = supabase.from("ventas_historial").select("id_cliente,rubro,cajas").eq("ano", ano).eq("mes", mes).in("rubro", ["ESTANDAR_ASTURIAS", "MORTADELA_SALPICAO"]);
+            if (!scope.all) q = q.in("vendedor", scope.names);
+            return q.order("id_cliente").order("id_articulo").range(a, b);
+          }),
+          histFetchAll((a, b) => supabase.from("activacion_clientes").select("cliente_codigo,vendedor_nombre").order("id").range(a, b))
+        ]);
+        const allowed = new Set(scope.names.map(normHist));
+        const carteraSet = /* @__PURE__ */ new Set();
+        cart.forEach((c) => {
+          if (!scope.all && !allowed.has(normHist(c.vendedor_nombre))) return;
+          carteraSet.add(String(c.cliente_codigo || "").trim().replace(/^0+/, ""));
         });
-        return data.map((r) => ({
-          id: r.id_cliente,
-          cliente: r.cliente,
-          vendedor: r.vendedor,
-          enCartera: !!r.en_cartera,
-          cajas: {
-            ACEITE: nz(r.cajas_aceite),
-            AZUCAR: nz(r.cajas_azucar),
-            POLLO: nz(r.cajas_pollo),
-            ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias),
-            MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao)
-          },
-          kgs: nz(r.kgs),
-          monto: nz(r.monto)
-        }));
+        const emByClient = /* @__PURE__ */ new Map();
+        emData.forEach((r) => {
+          const cid = String(r.id_cliente || "").trim().replace(/^0+/, "");
+          let cur = emByClient.get(cid);
+          if (!cur) {
+            cur = { ESTANDAR_ASTURIAS: 0, MORTADELA_SALPICAO: 0 };
+            emByClient.set(cid, cur);
+          }
+          if (r.rubro === "ESTANDAR_ASTURIAS") cur.ESTANDAR_ASTURIAS += nz(r.cajas);
+          if (r.rubro === "MORTADELA_SALPICAO") cur.MORTADELA_SALPICAO += nz(r.cajas);
+        });
+        return data.map((r) => {
+          const cid = String(r.id_cliente || "").trim().replace(/^0+/, "");
+          const em = emByClient.get(cid);
+          return {
+            id: r.id_cliente,
+            cliente: r.cliente,
+            vendedor: r.vendedor,
+            enCartera: r.en_cartera !== void 0 ? !!r.en_cartera : carteraSet.has(cid),
+            cajas: {
+              ACEITE: nz(r.cajas_aceite),
+              AZUCAR: nz(r.cajas_azucar),
+              POLLO: nz(r.cajas_pollo),
+              ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias) || +(em?.ESTANDAR_ASTURIAS || 0).toFixed(2),
+              MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao) || +(em?.MORTADELA_SALPICAO || 0).toFixed(2)
+            },
+            kgs: nz(r.kgs ?? r.kgs_total),
+            monto: nz(r.monto ?? r.monto_total)
+          };
+        });
       });
       res.json({ rows });
     } catch (e) {
@@ -2708,18 +2770,25 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
   app2.get("/api/historial/cliente/:id", authenticateToken, async (req, res) => {
     try {
       if (!supabase) return res.status(503).json({ error: "Supabase no configurado" });
-      const id = String(req.params.id || "").trim().replace(/^0+/, "");
+      const rawId = String(req.params.id || "").trim().replace(/^#/, "");
+      const id = rawId.replace(/^0+/, "");
       if (!/^[A-Za-z0-9._-]{1,24}$/.test(id)) return res.status(400).json({ error: "C\xF3digo de cliente inv\xE1lido" });
+      const candidateIds = Array.from(/* @__PURE__ */ new Set([rawId, id, id.padStart(6, "0"), id.padStart(5, "0"), id.padStart(4, "0")])).filter(Boolean);
       const scope = await histResolveScope(req);
       if (!scope.all && scope.names.length === 0) return res.status(404).json({ error: "Sin acceso" });
       const meses = await histFetchAll((a, b) => {
-        let q = supabase.from("hist_activacion_cliente_mes").select("*").eq("id_cliente", id);
+        let q = supabase.from("hist_activacion_cliente_mes").select("*").in("id_cliente", candidateIds);
         if (!scope.all) q = q.in("vendedor", scope.names);
         return q.order("ano").order("mes").range(a, b);
       });
       if (meses.length === 0) return res.json({ meses: [], productos: [] });
-      const prods = await histFetchAll((a, b) => supabase.from("ventas_historial").select("ano,mes,id_articulo,articulo,rubro,cajas,kgs,monto").eq("id_cliente", id).order("ano").order("mes").order("id_articulo").range(a, b));
+      const prods = await histFetchAll((a, b) => {
+        let q = supabase.from("ventas_historial").select("ano,mes,id_articulo,articulo,rubro,cajas,kgs,monto").in("id_cliente", candidateIds);
+        if (!scope.all) q = q.in("vendedor", scope.names);
+        return q.order("ano").order("mes").order("id_articulo").range(a, b);
+      });
       const pm = /* @__PURE__ */ new Map();
+      const cajasByMesRubro = /* @__PURE__ */ new Map();
       prods.forEach((r) => {
         const k = `${r.ano}|${r.mes}|${r.id_articulo}`;
         let m = pm.get(k);
@@ -2730,19 +2799,431 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         m.cajas += nz(r.cajas);
         m.kgs += nz(r.kgs);
         m.monto += nz(r.monto);
+        const mk = `${r.ano}|${r.mes}`;
+        let cm = cajasByMesRubro.get(mk);
+        if (!cm) {
+          cm = {};
+          cajasByMesRubro.set(mk, cm);
+        }
+        cm[r.rubro] = (cm[r.rubro] || 0) + nz(r.cajas);
       });
       res.json({
-        meses: meses.map((r) => ({
-          ano: r.ano,
-          mes: r.mes,
-          cliente: r.cliente,
-          vendedor: r.vendedor,
-          cajas: { ACEITE: nz(r.cajas_aceite), AZUCAR: nz(r.cajas_azucar), POLLO: nz(r.cajas_pollo), ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias), MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao) },
-          kgs: nz(r.kgs),
-          monto: nz(r.monto)
-        })),
+        meses: meses.map((r) => {
+          const cm = cajasByMesRubro.get(`${r.ano}|${r.mes}`) || {};
+          return {
+            ano: r.ano,
+            mes: r.mes,
+            cliente: r.cliente,
+            vendedor: r.vendedor,
+            cajas: {
+              ACEITE: nz(r.cajas_aceite) || +(cm.ACEITE || 0).toFixed(2),
+              AZUCAR: nz(r.cajas_azucar) || +(cm.AZUCAR || 0).toFixed(2),
+              POLLO: nz(r.cajas_pollo) || +(cm.POLLO || 0).toFixed(2),
+              ESTANDAR_ASTURIAS: nz(r.cajas_estandar_asturias) || +(cm.ESTANDAR_ASTURIAS || 0).toFixed(2),
+              MORTADELA_SALPICAO: nz(r.cajas_mortadela_salpicao) || +(cm.MORTADELA_SALPICAO || 0).toFixed(2)
+            },
+            kgs: nz(r.kgs ?? r.kgs_total),
+            monto: nz(r.monto ?? r.monto_total)
+          };
+        }),
         productos: [...pm.values()].map((p) => ({ ...p, cajas: +p.cajas.toFixed(2), kgs: +p.kgs.toFixed(2), monto: +p.monto.toFixed(2) }))
       });
+    } catch (e) {
+      histFail(res, e);
+    }
+  });
+  app2.get("/api/historial/rubro-360", authenticateToken, async (req, res) => {
+    try {
+      if (!supabase) return res.status(503).json({ error: "Supabase no configurado" });
+      const rubroCode = normalizeHistRubroCode(req.query.rubro);
+      if (!rubroCode) {
+        return res.status(400).json({ error: "Rubro inv\xE1lido o no especificado" });
+      }
+      const scope = await histResolveScope(req);
+      if (!scope.all && scope.names.length === 0) {
+        return res.json({
+          rubro: rubroCode,
+          periodos: [],
+          carteraTotal: 0,
+          activadosMesActual: 0,
+          metaMesActual: 0,
+          meses: [],
+          skus: [],
+          clientes: [],
+          resumen: {
+            totalMeses: 0,
+            promedioClientesMes: 0,
+            promedioCajasMes: 0,
+            promedioKgsMes: 0,
+            promedioMontoMes: 0,
+            mejorMes: null,
+            peorMes: null,
+            totalCajasHistorico: 0,
+            totalKgsHistorico: 0,
+            totalMontoHistorico: 0,
+            clientesUnicosHistorico: 0,
+            clientesHabituales: 0,
+            oportunidadRecuperacion: 0,
+            reactivadosEsteMes: 0,
+            nuevosEsteMes: 0
+          }
+        });
+      }
+      const result = await histCached(`rub360:${rubroCode}:${scopeKey(scope)}`, async () => {
+        const [periodos, rows, cart, metas] = await Promise.all([
+          histCached(
+            "periodos",
+            () => histFetchAll((a, b) => supabase.from("hist_periodos").select("ano,mes").order("ano").order("mes").range(a, b))
+          ),
+          histFetchAll((a, b) => {
+            let q = supabase.from("ventas_historial").select("ano,mes,id_cliente,cliente,vendedor,id_articulo,articulo,cajas,unidades,kgs,monto").eq("rubro", rubroCode);
+            if (!scope.all) q = q.in("vendedor", scope.names);
+            return q.order("ano").order("mes").order("id_cliente").order("id_articulo").range(a, b);
+          }),
+          histFetchAll(
+            (a, b) => supabase.from("activacion_clientes").select("*").order("id").range(a, b)
+          ),
+          histFetchAll(
+            (a, b) => supabase.from("metas_activacion").select("*").order("id").range(a, b)
+          )
+        ]);
+        const allowed = new Set(scope.names.map(normHist));
+        const isClientActiveInRubro = (c, rub) => {
+          switch (rub) {
+            case "ACEITE":
+              return !!c.aceite;
+            case "AZUCAR":
+              return !!c.azucar;
+            case "POLLO":
+              return !!(c.pollo ?? c.arroz);
+            case "ESTANDAR_ASTURIAS":
+              return !!(c.estandar_asturias ?? c.entero);
+            case "MORTADELA_SALPICAO":
+              return !!(c.mortadela_salpicao ?? c.ligeros);
+            default:
+              return false;
+          }
+        };
+        const carteraMap = /* @__PURE__ */ new Map();
+        cart.forEach((c) => {
+          if (!scope.all && !allowed.has(normHist(c.vendedor_nombre))) return;
+          const normId = String(c.cliente_codigo || "").trim().replace(/^#/, "").replace(/^0+/, "");
+          if (!normId) return;
+          const activoActual = isClientActiveInRubro(c, rubroCode);
+          const prev = carteraMap.get(normId);
+          carteraMap.set(normId, {
+            rawId: String(c.cliente_codigo || normId).trim(),
+            nombre: String(c.cliente_nombre || prev?.nombre || "").trim(),
+            vendedor: String(c.vendedor_nombre || prev?.vendedor || "").trim(),
+            activoActual: prev ? prev.activoActual || activoActual : activoActual
+          });
+        });
+        const carteraTotal = carteraMap.size;
+        const activadosClientesActual = [...carteraMap.values()].filter((c) => c.activoActual).length;
+        let metaMesActual = 0;
+        let activadosGridActual = 0;
+        metas.forEach((m) => {
+          if (!scope.all && !allowed.has(normHist(m.vendedor_nombre))) return;
+          if (normalizeHistRubroCode(m.categoria) === rubroCode) {
+            metaMesActual += nz(m.meta);
+            activadosGridActual += nz(m.activados);
+          }
+        });
+        const activadosMesActual = activadosGridActual > 0 ? activadosGridActual : activadosClientesActual;
+        const sortedPeriodos = [...periodos].sort((a, b) => a.ano - b.ano || a.mes - b.mes);
+        const mesAggMap = /* @__PURE__ */ new Map();
+        sortedPeriodos.forEach((p) => {
+          mesAggMap.set(`${p.ano}-${p.mes}`, {
+            ano: p.ano,
+            mes: p.mes,
+            clientCajas: /* @__PURE__ */ new Map(),
+            skusSet: /* @__PURE__ */ new Set(),
+            cajas: 0,
+            unidades: 0,
+            kgs: 0,
+            monto: 0
+          });
+        });
+        const skuAggMap = /* @__PURE__ */ new Map();
+        const cliAggMap = /* @__PURE__ */ new Map();
+        carteraMap.forEach((cInfo, normId) => {
+          cliAggMap.set(normId, {
+            id: cInfo.rawId.padStart(6, "0"),
+            cliente: cInfo.nombre,
+            vendedor: cInfo.vendedor,
+            totalCajas: 0,
+            totalKgs: 0,
+            totalMonto: 0,
+            porMes: /* @__PURE__ */ new Map()
+          });
+        });
+        rows.forEach((r) => {
+          const pKey = `${r.ano}-${r.mes}`;
+          let mAgg = mesAggMap.get(pKey);
+          if (!mAgg) {
+            mAgg = { ano: r.ano, mes: r.mes, clientCajas: /* @__PURE__ */ new Map(), skusSet: /* @__PURE__ */ new Set(), cajas: 0, unidades: 0, kgs: 0, monto: 0 };
+            mesAggMap.set(pKey, mAgg);
+          }
+          const normCid = String(r.id_cliente || "").trim().replace(/^#/, "").replace(/^0+/, "");
+          const cajas = nz(r.cajas);
+          const unidades = nz(r.unidades);
+          const kgs = nz(r.kgs);
+          const monto = nz(r.monto);
+          const sku = String(r.id_articulo || "").trim();
+          mAgg.cajas += cajas;
+          mAgg.unidades += unidades;
+          mAgg.kgs += kgs;
+          mAgg.monto += monto;
+          if (normCid) {
+            mAgg.clientCajas.set(normCid, (mAgg.clientCajas.get(normCid) || 0) + cajas);
+          }
+          if (sku && cajas > 0) {
+            mAgg.skusSet.add(sku);
+          }
+          if (sku) {
+            let sAgg = skuAggMap.get(sku);
+            if (!sAgg) {
+              sAgg = {
+                sku,
+                articulo: String(r.articulo || sku).trim(),
+                totalCajas: 0,
+                totalUnidades: 0,
+                totalKgs: 0,
+                totalMonto: 0,
+                allClients: /* @__PURE__ */ new Map(),
+                porMes: /* @__PURE__ */ new Map()
+              };
+              skuAggMap.set(sku, sAgg);
+            }
+            sAgg.totalCajas += cajas;
+            sAgg.totalUnidades += unidades;
+            sAgg.totalKgs += kgs;
+            sAgg.totalMonto += monto;
+            if (normCid) {
+              sAgg.allClients.set(normCid, (sAgg.allClients.get(normCid) || 0) + cajas);
+            }
+            let sm = sAgg.porMes.get(pKey);
+            if (!sm) {
+              sm = { cajas: 0, kgs: 0, monto: 0, clientCajas: /* @__PURE__ */ new Map() };
+              sAgg.porMes.set(pKey, sm);
+            }
+            sm.cajas += cajas;
+            sm.kgs += kgs;
+            sm.monto += monto;
+            if (normCid) {
+              sm.clientCajas.set(normCid, (sm.clientCajas.get(normCid) || 0) + cajas);
+            }
+          }
+          if (normCid) {
+            let cAgg = cliAggMap.get(normCid);
+            if (!cAgg) {
+              cAgg = {
+                id: String(r.id_cliente || normCid).trim(),
+                cliente: String(r.cliente || "").trim(),
+                vendedor: String(r.vendedor || "").trim(),
+                totalCajas: 0,
+                totalKgs: 0,
+                totalMonto: 0,
+                porMes: /* @__PURE__ */ new Map()
+              };
+              cliAggMap.set(normCid, cAgg);
+            } else {
+              if (!cAgg.cliente && r.cliente) cAgg.cliente = String(r.cliente).trim();
+              if (!cAgg.vendedor && r.vendedor) cAgg.vendedor = String(r.vendedor).trim();
+            }
+            cAgg.totalCajas += cajas;
+            cAgg.totalKgs += kgs;
+            cAgg.totalMonto += monto;
+            let cm = cAgg.porMes.get(pKey);
+            if (!cm) {
+              cm = { cajas: 0, kgs: 0, monto: 0 };
+              cAgg.porMes.set(pKey, cm);
+            }
+            cm.cajas += cajas;
+            cm.kgs += kgs;
+            cm.monto += monto;
+          }
+        });
+        const mesesList = [];
+        const orderedMesAggs = [...mesAggMap.values()].sort((a, b) => a.ano - b.ano || a.mes - b.mes);
+        orderedMesAggs.forEach((mAgg, idx) => {
+          let clientesActivados = 0;
+          let clientesEnCartera = 0;
+          let clientesFueraCartera = 0;
+          mAgg.clientCajas.forEach((netCajas, cid) => {
+            if (netCajas > 0) {
+              clientesActivados++;
+              if (carteraMap.has(cid)) clientesEnCartera++;
+              else clientesFueraCartera++;
+            }
+          });
+          const prev = idx > 0 ? mesesList[idx - 1] : null;
+          const variacionClientes = prev !== null ? clientesActivados - prev.clientesActivados : null;
+          const variacionPct = prev !== null && prev.clientesActivados > 0 ? +((clientesActivados - prev.clientesActivados) / prev.clientesActivados * 100).toFixed(1) : null;
+          const porcentajeCartera = carteraTotal > 0 ? +(clientesActivados / carteraTotal * 100).toFixed(1) : 0;
+          mesesList.push({
+            ano: mAgg.ano,
+            mes: mAgg.mes,
+            clientesActivados,
+            clientesEnCartera,
+            clientesFueraCartera,
+            porcentajeCartera,
+            variacionClientes,
+            variacionPct,
+            cajas: +mAgg.cajas.toFixed(2),
+            unidades: +mAgg.unidades.toFixed(2),
+            kgs: +mAgg.kgs.toFixed(2),
+            monto: +mAgg.monto.toFixed(2),
+            skusActivos: mAgg.skusSet.size,
+            kgsPorCliente: clientesActivados > 0 ? +(mAgg.kgs / clientesActivados).toFixed(2) : 0,
+            ticketPromedio: clientesActivados > 0 ? +(mAgg.monto / clientesActivados).toFixed(2) : 0
+          });
+        });
+        const skusList = [...skuAggMap.values()].map((s) => {
+          const porMesObj = {};
+          let mesesActivos = 0;
+          s.porMes.forEach((sm, pk) => {
+            let cliAct = 0;
+            sm.clientCajas.forEach((c) => {
+              if (c > 0) cliAct++;
+            });
+            if (sm.cajas > 0) mesesActivos++;
+            porMesObj[pk] = {
+              cajas: +sm.cajas.toFixed(2),
+              kgs: +sm.kgs.toFixed(2),
+              monto: +sm.monto.toFixed(2),
+              clientes: cliAct
+            };
+          });
+          let clientesUnicos = 0;
+          s.allClients.forEach((c) => {
+            if (c > 0) clientesUnicos++;
+          });
+          return {
+            sku: s.sku,
+            articulo: s.articulo,
+            totalCajas: +s.totalCajas.toFixed(2),
+            totalUnidades: +s.totalUnidades.toFixed(2),
+            totalKgs: +s.totalKgs.toFixed(2),
+            totalMonto: +s.totalMonto.toFixed(2),
+            clientesUnicos,
+            mesesActivos,
+            porMes: porMesObj
+          };
+        }).sort((a, b) => b.totalKgs - a.totalKgs || b.totalCajas - a.totalCajas);
+        const totalMesesDisponibles = mesesList.length || 1;
+        let clientesUnicosHistorico = 0;
+        let clientesHabituales = 0;
+        let oportunidadRecuperacion = 0;
+        let reactivadosEsteMes = 0;
+        let nuevosEsteMes = 0;
+        const allClientesList = [...cliAggMap.entries()].map(([normId, c]) => {
+          const cartInfo = carteraMap.get(normId);
+          const enCartera = !!cartInfo;
+          const activoMesActual = !!cartInfo?.activoActual;
+          const porMesObj = {};
+          let mesesActivados = 0;
+          let ultimoMesCompra = null;
+          orderedMesAggs.forEach((mAgg) => {
+            const pk = `${mAgg.ano}-${mAgg.mes}`;
+            const cm = c.porMes.get(pk);
+            const cajas = cm ? +cm.cajas.toFixed(2) : 0;
+            const kgs = cm ? +cm.kgs.toFixed(2) : 0;
+            const monto = cm ? +cm.monto.toFixed(2) : 0;
+            const activo = cajas > 0;
+            if (activo) {
+              mesesActivados++;
+              ultimoMesCompra = { ano: mAgg.ano, mes: mAgg.mes };
+            }
+            if (cajas !== 0 || kgs !== 0 || monto !== 0) {
+              porMesObj[pk] = { cajas, kgs, monto, activo };
+            }
+          });
+          if (mesesActivados > 0) clientesUnicosHistorico++;
+          if (mesesActivados >= 3) clientesHabituales++;
+          let estado360;
+          if (mesesActivados > 0 && activoMesActual) {
+            estado360 = "REACTIVADO_ESTE_MES";
+            reactivadosEsteMes++;
+          } else if (mesesActivados === 0 && activoMesActual) {
+            estado360 = "NUEVO_ESTE_MES";
+            nuevosEsteMes++;
+          } else if (mesesActivados > 0 && !activoMesActual && enCartera) {
+            estado360 = "OPORTUNIDAD_RECUPERACION";
+            oportunidadRecuperacion++;
+          } else if (!enCartera) {
+            estado360 = "FUERA_CARTERA";
+          } else {
+            estado360 = "SIN_HISTORIAL";
+          }
+          return {
+            id: c.id,
+            cliente: c.cliente,
+            vendedor: c.vendedor,
+            enCartera,
+            activoMesActual,
+            mesesActivados,
+            totalMesesDisponibles,
+            frecuenciaPct: +(mesesActivados / totalMesesDisponibles * 100).toFixed(0),
+            ultimoMesCompra,
+            totalCajas: +c.totalCajas.toFixed(2),
+            totalKgs: +c.totalKgs.toFixed(2),
+            totalMonto: +c.totalMonto.toFixed(2),
+            estado360,
+            porMes: porMesObj
+          };
+        });
+        const estadoPriority = {
+          OPORTUNIDAD_RECUPERACION: 1,
+          REACTIVADO_ESTE_MES: 2,
+          NUEVO_ESTE_MES: 3,
+          FUERA_CARTERA: 4,
+          SIN_HISTORIAL: 5
+        };
+        allClientesList.sort(
+          (a, b) => (estadoPriority[a.estado360] || 9) - (estadoPriority[b.estado360] || 9) || b.mesesActivados - a.mesesActivados || b.totalKgs - a.totalKgs
+        );
+        const clientesList = scope.all ? allClientesList.filter((c, i) => c.mesesActivados > 0 || c.activoMesActual || i < 600) : allClientesList;
+        const totalCajasHistorico = +mesesList.reduce((acc, m) => acc + m.cajas, 0).toFixed(2);
+        const totalKgsHistorico = +mesesList.reduce((acc, m) => acc + m.kgs, 0).toFixed(2);
+        const totalMontoHistorico = +mesesList.reduce((acc, m) => acc + m.monto, 0).toFixed(2);
+        const nMeses = mesesList.length || 1;
+        const promedioClientesMes = +(mesesList.reduce((acc, m) => acc + m.clientesActivados, 0) / nMeses).toFixed(1);
+        const promedioCajasMes = +(totalCajasHistorico / nMeses).toFixed(1);
+        const promedioKgsMes = +(totalKgsHistorico / nMeses).toFixed(1);
+        const promedioMontoMes = +(totalMontoHistorico / nMeses).toFixed(2);
+        const sortedByCli = [...mesesList].sort((a, b) => b.clientesActivados - a.clientesActivados || b.kgs - a.kgs);
+        const mejorMes = sortedByCli.length > 0 ? sortedByCli[0] : null;
+        const peorMes = sortedByCli.length > 0 ? sortedByCli[sortedByCli.length - 1] : null;
+        return {
+          rubro: rubroCode,
+          periodos: sortedPeriodos,
+          carteraTotal,
+          activadosMesActual,
+          metaMesActual,
+          meses: mesesList,
+          skus: skusList,
+          clientes: clientesList,
+          resumen: {
+            totalMeses: mesesList.length,
+            promedioClientesMes,
+            promedioCajasMes,
+            promedioKgsMes,
+            promedioMontoMes,
+            mejorMes: mejorMes ? { ano: mejorMes.ano, mes: mejorMes.mes, clientesActivados: mejorMes.clientesActivados, kgs: mejorMes.kgs, cajas: mejorMes.cajas, monto: mejorMes.monto } : null,
+            peorMes: peorMes ? { ano: peorMes.ano, mes: peorMes.mes, clientesActivados: peorMes.clientesActivados, kgs: peorMes.kgs, cajas: peorMes.cajas, monto: peorMes.monto } : null,
+            totalCajasHistorico,
+            totalKgsHistorico,
+            totalMontoHistorico,
+            clientesUnicosHistorico,
+            clientesHabituales,
+            oportunidadRecuperacion,
+            reactivadosEsteMes,
+            nuevosEsteMes
+          }
+        };
+      });
+      res.json(result);
     } catch (e) {
       histFail(res, e);
     }
