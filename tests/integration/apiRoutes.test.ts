@@ -294,6 +294,17 @@ describe('Integration: API Server Routes & Authentication Flow', () => {
       expect(data.clientes.length).toBeGreaterThan(0);
       expect(data.resumen.totalKgsHistorico).toBeGreaterThan(0);
       expect(data.resumen.mejorMes).not.toBeNull();
+      // El monto ($) ya no forma parte del dashboard 360
+      expect(data.resumen.totalMontoHistorico).toBeUndefined();
+      expect(data.meses[0].monto).toBeUndefined();
+      expect(data.skus[0].totalMonto).toBeUndefined();
+      // Meta por mes: solo existe donde fue registrada (null si no hay dato real)
+      expect(Array.isArray(data.metasPorMes)).toBe(true);
+      data.meses.forEach((m: any) => {
+        expect(m.meta === null || typeof m.meta === 'number').toBe(true);
+      });
+      expect(data.metasPorMes.length).toBeGreaterThan(0);
+      expect(data.metaMesActual).toBeGreaterThan(0);
     }, 20000);
   });
 });

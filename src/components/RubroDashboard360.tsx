@@ -57,8 +57,8 @@ interface Props {
 }
 
 type SubTab360 = 'evolucion' | 'productos' | 'clientes';
-type ChartMetric = 'clientes' | 'kgs' | 'cajas' | 'monto';
-type SkuMetric = 'cajas' | 'kgs' | 'monto' | 'clientes';
+type ChartMetric = 'clientes' | 'kgs' | 'cajas';
+type SkuMetric = 'cajas' | 'kgs' | 'clientes';
 type ClientFilter = 'TODOS' | 'OPORTUNIDAD_RECUPERACION' | 'ACTIVOS_ACTUAL' | 'HABITUALES' | 'SIN_HISTORIAL';
 
 const fmtInt = (n: number) =>
@@ -66,9 +66,6 @@ const fmtInt = (n: number) =>
 
 const fmtDec = (n: number, d = 1) =>
   (n || 0).toLocaleString('es-VE', { minimumFractionDigits: d, maximumFractionDigits: d });
-
-const fmtUsd = (n: number) =>
-  '$' + (n || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export const getRubroTheme = (rubro: RubroCodigo) => {
   switch (rubro) {
@@ -203,9 +200,7 @@ export const RubroDashboard360: React.FC<Props> = ({
           ? m.clientesActivados
           : chartMetric === 'kgs'
           ? m.kgs
-          : chartMetric === 'cajas'
-          ? m.cajas
-          : m.monto;
+          : m.cajas;
       return {
         key: `${m.ano}-${m.mes}`,
         label: `${MESES_CORTO[m.mes]} ${String(m.ano).slice(-2)}`,
@@ -213,7 +208,9 @@ export const RubroDashboard360: React.FC<Props> = ({
         value: val,
         subLabel:
           chartMetric === 'clientes'
-            ? `${m.porcentajeCartera}% cart.`
+            ? m.meta !== null
+              ? `Meta ${fmtInt(m.meta)}`
+              : `${m.porcentajeCartera}% cart.`
             : `${m.clientesActivados} cli`,
         variacionPct: m.variacionPct,
         isCurrent: false
@@ -340,7 +337,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                 Radiografía Histórica del Rubro: <span className={theme.accentText}>{RUBRO_LABEL[selectedRubro]}</span>
               </h2>
               <p className="text-xs text-neutral-400 font-sans mt-0.5">
-                Evolución real mes a mes de clientes activados, cajas, kilogramos, facturación, SKUs y matriz de reactivación de clientes.
+                Evolución real mes a mes de clientes activados, meta solicitada, cajas, kilogramos, SKUs y matriz de reactivación de clientes.
               </p>
             </div>
           </div>
@@ -509,24 +506,33 @@ export const RubroDashboard360: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* KPI 4: Facturación Histórica del Rubro */}
+            {/* KPI 4: Meta solicitada del mes actual vs activación */}
             <div className="bg-neutral-950/90 border border-neutral-800 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-[10px] font-sans font-bold text-neutral-400 uppercase tracking-wider mb-2">
-                <span>Facturación Histórica</span>
-                <DollarSign className="w-4 h-4 text-amber-400" />
+                <span>Meta Mes Actual</span>
+                <Target className="w-4 h-4 text-amber-400" />
               </div>
-              <div>
-                <div className="text-xl md:text-2xl font-mono font-bold text-amber-400 truncate">
-                  {fmtUsd(data.resumen.totalMontoHistorico)}
-                </div>
-                <div className="text-[11px] font-mono text-neutral-400 mt-1">
-                  {fmtInt(data.resumen.clientesUnicosHistorico)} clientes únicos en el año
-                </div>
-              </div>
-              <div className="mt-3 pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[11px] font-mono">
-                <span className="text-neutral-500">Prom. Mensual:</span>
-                <span className="text-white font-bold">{fmtUsd(data.resumen.promedioMontoMes)}</span>
-              </div>
+              {metaActual > 0 ? (
+                <>
+                  <div>
+                    <div className="text-2xl font-mono font-bold text-amber-400">
+                      {fmtInt(activadosActual)}
+                      <span className="text-xs text-neutral-500 font-normal"> / {fmtInt(metaActual)} meta</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-neutral-400 mt-1">
+                      Cumplimiento: <strong className="text-white">{fmtDec((activadosActual / metaActual) * 100, 1)}%</strong>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-neutral-500">Brecha:</span>
+                    <span className={`font-bold ${activadosActual >= metaActual ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {activadosActual >= metaActual ? '¡Meta cumplida!' : `Faltan ${fmtInt(metaActual - activadosActual)} cli`}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="text-xs text-neutral-500 py-4">Sin meta registrada para el mes actual</div>
+              )}
             </div>
 
             {/* KPI 5: Oportunidad de Recuperación / Reactivación */}
@@ -637,8 +643,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                       [
                         ['clientes', 'Clientes Activados'],
                         ['cajas', 'Cajas'],
-                        ['kgs', 'Kilogramos (KG)'],
-                        ['monto', 'Facturación ($)']
+                        ['kgs', 'Kilogramos (KG)']
                       ] as [ChartMetric, string][]
                     ).map(([mKey, mLabel]) => (
                       <button
@@ -659,9 +664,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                   {chartPoints.map((pt) => {
                     const heightPct = Math.max(6, Math.min(100, Math.round((pt.value / maxChartVal) * 100)));
                     const formattedValue =
-                      chartMetric === 'monto'
-                        ? fmtUsd(pt.value)
-                        : chartMetric === 'clientes'
+                      chartMetric === 'clientes'
                         ? `${fmtInt(pt.value)} cli`
                         : `${fmtInt(pt.value)} ${chartMetric === 'kgs' ? 'kg' : 'cj'}`;
 
@@ -711,29 +714,30 @@ export const RubroDashboard360: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Tabla Mensual Detallada */}
+              {/* Tabla Mensual Detallada: Meta solicitada vs Activación */}
               <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden">
                 <div className="p-4 border-b border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <h3 className="text-xs md:text-sm font-sans font-bold text-white uppercase tracking-wider">
-                    Detalle Mensual de Activación y Volumen — {RUBRO_LABEL[selectedRubro]}
+                    Meta Solicitada vs Activación por Mes — {RUBRO_LABEL[selectedRubro]}
                   </h3>
                   <span className="text-[11px] font-mono text-neutral-400">
                     Base de Cartera Actual: <strong className="text-white">{fmtInt(carteraTotal)} clientes</strong>
                   </span>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse min-w-[820px] text-xs">
+                  <table className="w-full text-left border-collapse min-w-[900px] text-xs">
                     <thead>
                       <tr className="bg-neutral-900/80 border-b border-neutral-800 text-[10px] font-sans text-neutral-400 uppercase tracking-wider">
                         <th className="p-3 font-bold text-white">Mes / Período</th>
-                        <th className="p-3 text-right">Clientes Activados</th>
+                        <th className="p-3 text-right text-amber-400">Meta Solicitada</th>
+                        <th className="p-3 text-right text-emerald-400">Clientes Activados</th>
+                        <th className="p-3 text-right">% Cumpl. Meta</th>
+                        <th className="p-3 text-right">Brecha vs Meta</th>
                         <th className="p-3 text-right">% Cobertura Cartera</th>
                         <th className="p-3 text-right">Variación vs Mes Ant.</th>
                         <th className="p-3 text-right">Cajas Netas</th>
                         <th className="p-3 text-right">Volumen (KG)</th>
-                        <th className="p-3 text-right">Facturación ($)</th>
                         <th className="p-3 text-right">Prom. KG / Cli</th>
-                        <th className="p-3 text-right">Ticket Prom.</th>
                         <th className="p-3 text-center">SKUs Activos</th>
                       </tr>
                     </thead>
@@ -744,6 +748,9 @@ export const RubroDashboard360: React.FC<Props> = ({
                           data.resumen.mejorMes.ano === m.ano &&
                           data.resumen.mejorMes.mes === m.mes &&
                           m.clientesActivados > 0;
+                        const hasMeta = m.meta !== null && m.meta > 0;
+                        const cumpl = hasMeta ? (m.clientesActivados / (m.meta as number)) * 100 : null;
+                        const brecha = hasMeta ? (m.meta as number) - m.clientesActivados : null;
                         return (
                           <tr key={`${m.ano}-${m.mes}`} className="hover:bg-neutral-900/40 transition-colors">
                             <td className="p-3 font-sans font-bold text-white flex items-center gap-2">
@@ -756,8 +763,33 @@ export const RubroDashboard360: React.FC<Props> = ({
                                 </span>
                               )}
                             </td>
+                            <td className="p-3 text-right">
+                              {hasMeta ? (
+                                <span className="font-bold text-amber-400">{fmtInt(m.meta as number)} cli</span>
+                              ) : (
+                                <span className="text-[10px] font-sans text-neutral-600" title="No hay meta guardada para este mes">Sin meta registrada</span>
+                              )}
+                            </td>
                             <td className="p-3 text-right font-bold text-emerald-400">
                               {fmtInt(m.clientesActivados)} <span className="text-[10px] text-neutral-500">cli</span>
+                            </td>
+                            <td className="p-3 text-right">
+                              {cumpl !== null ? (
+                                <span className={`font-bold ${cumpl >= 100 ? 'text-emerald-400' : 'text-amber-400'}`}>{fmtDec(cumpl, 1)}%</span>
+                              ) : (
+                                <span className="text-neutral-700">—</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right">
+                              {brecha !== null ? (
+                                brecha > 0 ? (
+                                  <span className="font-bold text-red-400">Faltaron {fmtInt(brecha)}</span>
+                                ) : (
+                                  <span className="font-bold text-emerald-400">+{fmtInt(Math.abs(brecha))} sobre meta</span>
+                                )
+                              ) : (
+                                <span className="text-neutral-700">—</span>
+                              )}
                             </td>
                             <td className="p-3 text-right">
                               <div className="inline-flex items-center gap-2">
@@ -794,9 +826,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                             </td>
                             <td className="p-3 text-right text-neutral-200">{fmtDec(m.cajas, 1)}</td>
                             <td className="p-3 text-right text-white font-bold">{fmtDec(m.kgs, 1)}</td>
-                            <td className="p-3 text-right text-amber-400">{fmtUsd(m.monto)}</td>
                             <td className="p-3 text-right text-neutral-300">{fmtDec(m.kgsPorCliente, 1)} kg</td>
-                            <td className="p-3 text-right text-neutral-300">{fmtUsd(m.ticketPromedio)}</td>
                             <td className="p-3 text-center text-neutral-400">{m.skusActivos}</td>
                           </tr>
                         );
@@ -808,36 +838,38 @@ export const RubroDashboard360: React.FC<Props> = ({
                           <Target className="w-3.5 h-3.5 text-red-500 shrink-0" />
                           <span>MES ACTUAL (EN CURSO)</span>
                         </td>
+                        <td className="p-3 text-right font-bold text-amber-400">
+                          {metaActual > 0 ? `${fmtInt(metaActual)} cli` : <span className="text-[10px] font-sans text-neutral-500">Sin meta registrada</span>}
+                        </td>
                         <td className="p-3 text-right font-bold text-white">
-                          {fmtInt(activadosActual)}{' '}
-                          <span className="text-[10px] text-neutral-400">
-                            / {metaActual > 0 ? `${fmtInt(metaActual)} meta` : `${fmtInt(carteraTotal)} cart.`}
-                          </span>
+                          {fmtInt(activadosActual)} <span className="text-[10px] text-neutral-400">cli</span>
                         </td>
                         <td className="p-3 text-right font-bold text-amber-400">
-                          {metaActual > 0
-                            ? `${fmtDec((activadosActual / metaActual) * 100, 1)}% meta`
-                            : `${fmtDec(pctActualCartera, 1)}% cart.`}
+                          {metaActual > 0 ? `${fmtDec((activadosActual / metaActual) * 100, 1)}%` : '—'}
                         </td>
                         <td className="p-3 text-right font-bold">
-                          {currentStats && currentStats.faltante > 0 ? (
-                            <span className="text-red-400">Faltan {fmtInt(currentStats.faltante)} cli</span>
+                          {metaActual > 0 ? (
+                            activadosActual >= metaActual ? (
+                              <span className="text-emerald-400">Meta cumplida</span>
+                            ) : (
+                              <span className="text-red-400">Faltan {fmtInt(metaActual - activadosActual)} cli</span>
+                            )
                           ) : (
-                            <span className="text-emerald-400">En Meta</span>
+                            <span className="text-neutral-600">—</span>
                           )}
+                        </td>
+                        <td className="p-3 text-right font-bold text-amber-400">{fmtDec(pctActualCartera, 1)}%</td>
+                        <td className="p-3 text-right text-neutral-400">
+                          {currentStats ? `Est. cierre ${currentStats.estCierre} cli` : '—'}
                         </td>
                         <td className="p-3 text-right text-neutral-400">—</td>
                         <td className="p-3 text-right font-bold text-white">
                           {fmtDec(currentMonthVolumenBySku.totalKgActual, 1)} kg
                         </td>
-                        <td className="p-3 text-right text-neutral-400">—</td>
                         <td className="p-3 text-right text-neutral-300">
                           {activadosActual > 0
                             ? `${fmtDec(currentMonthVolumenBySku.totalKgActual / activadosActual, 1)} kg`
                             : '—'}
-                        </td>
-                        <td className="p-3 text-right text-neutral-400">
-                          {currentStats ? `Est. ${currentStats.estCierre} cli` : '—'}
                         </td>
                         <td className="p-3 text-center text-neutral-300">{currentMonthVolumenBySku.bySku.size}</td>
                       </tr>
@@ -847,9 +879,12 @@ export const RubroDashboard360: React.FC<Props> = ({
                         <td className="p-3 font-sans text-neutral-300 uppercase">
                           TOTAL / PROMEDIO HISTÓRICO ({data.resumen.totalMeses} MESES)
                         </td>
+                        <td className="p-3 text-right text-neutral-500">—</td>
                         <td className="p-3 text-right text-emerald-400">
                           Prom: {fmtDec(data.resumen.promedioClientesMes, 1)} cli/m
                         </td>
+                        <td className="p-3 text-right text-neutral-500">—</td>
+                        <td className="p-3 text-right text-neutral-500">—</td>
                         <td className="p-3 text-right text-neutral-300">
                           {carteraTotal > 0
                             ? `${fmtDec((data.resumen.promedioClientesMes / carteraTotal) * 100, 1)}% prom.`
@@ -860,14 +895,22 @@ export const RubroDashboard360: React.FC<Props> = ({
                         </td>
                         <td className="p-3 text-right text-white">{fmtDec(data.resumen.totalCajasHistorico, 1)}</td>
                         <td className="p-3 text-right text-white">{fmtDec(data.resumen.totalKgsHistorico, 1)}</td>
-                        <td className="p-3 text-right text-amber-400">{fmtUsd(data.resumen.totalMontoHistorico)}</td>
-                        <td className="p-3 text-right text-neutral-400">—</td>
                         <td className="p-3 text-right text-neutral-400">—</td>
                         <td className="p-3 text-center text-neutral-300">{data.skus.length} SKUs</td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
+                {data.meses.some((m) => m.meta === null) && (
+                  <div className="px-4 py-3 border-t border-neutral-800 bg-amber-950/10 text-[11px] font-sans text-amber-200/90 flex items-start gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Sin meta registrada:</strong> el sistema solo conservaba la meta del mes en curso, por lo que no existe meta guardada para
+                      los meses anteriores y no se muestra ningún valor estimado. La activación de esos meses sí es real (ventas históricas).
+                      Desde ahora la meta de cada mes queda guardada y se verá aquí automáticamente.
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -891,8 +934,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                     [
                       ['cajas', 'Cajas'],
                       ['kgs', 'Kilogramos'],
-                      ['clientes', 'Clientes'],
-                      ['monto', 'Monto ($)']
+                      ['clientes', 'Clientes']
                     ] as [SkuMetric, string][]
                   ).map(([k, label]) => (
                     <button
@@ -945,9 +987,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                             ? fmtDec(s.totalCajas, 1)
                             : skuMetric === 'kgs'
                             ? fmtDec(s.totalKgs, 1)
-                            : skuMetric === 'clientes'
-                            ? `${fmtInt(s.clientesUnicos)} cli`
-                            : fmtUsd(s.totalMonto);
+                            : `${fmtInt(s.clientesUnicos)} cli`;
 
                         return (
                           <tr key={s.sku} className="hover:bg-neutral-900/40 transition-colors">
@@ -967,13 +1007,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                                   key={pk}
                                   className={`p-3 text-right ${v > 0 ? 'text-neutral-200 font-bold' : 'text-neutral-700'}`}
                                 >
-                                  {v > 0
-                                    ? skuMetric === 'monto'
-                                      ? fmtUsd(v)
-                                      : skuMetric === 'clientes'
-                                      ? fmtInt(v)
-                                      : fmtDec(v, 1)
-                                    : '—'}
+                                  {v > 0 ? (skuMetric === 'clientes' ? fmtInt(v) : fmtDec(v, 1)) : '—'}
                                 </td>
                               );
                             })}
@@ -1095,7 +1129,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                                   key={pk}
                                   title={
                                     active
-                                      ? `${MESES_LARGO[p.mes]}: ${fmtDec(cell.cajas, 1)} cajas · ${fmtDec(cell.kgs, 1)} KG · ${fmtUsd(cell.monto)}`
+                                      ? `${MESES_LARGO[p.mes]}: ${fmtDec(cell.cajas, 1)} cajas · ${fmtDec(cell.kgs, 1)} KG`
                                       : 'Sin compra en este mes'
                                   }
                                   className={`p-2.5 text-center ${

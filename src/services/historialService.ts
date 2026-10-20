@@ -37,10 +37,18 @@ export interface Rubro360Mes {
   cajas: number;
   unidades: number;
   kgs: number;
-  monto: number;
   skusActivos: number;
   kgsPorCliente: number;
-  ticketPromedio: number;
+  /** Meta solicitada para ese mes si fue registrada; null = no hay meta guardada de ese mes. */
+  meta: number | null;
+}
+
+export interface Rubro360MetaMes {
+  periodo: string;
+  ano: number;
+  mes: number;
+  meta: number;
+  activados: number;
 }
 
 export interface Rubro360Sku {
@@ -49,10 +57,9 @@ export interface Rubro360Sku {
   totalCajas: number;
   totalUnidades: number;
   totalKgs: number;
-  totalMonto: number;
   clientesUnicos: number;
   mesesActivos: number;
-  porMes: Record<string, { cajas: number; kgs: number; monto: number; clientes: number }>;
+  porMes: Record<string, { cajas: number; kgs: number; clientes: number }>;
 }
 
 export type EstadoClienteRubro360 =
@@ -74,9 +81,8 @@ export interface Rubro360Cliente {
   ultimoMesCompra: { ano: number; mes: number } | null;
   totalCajas: number;
   totalKgs: number;
-  totalMonto: number;
   estado360: EstadoClienteRubro360;
-  porMes: Record<string, { cajas: number; kgs: number; monto: number; activo: boolean }>;
+  porMes: Record<string, { cajas: number; kgs: number; activo: boolean }>;
 }
 
 export interface Rubro360Data {
@@ -85,6 +91,8 @@ export interface Rubro360Data {
   carteraTotal: number;
   activadosMesActual: number;
   metaMesActual: number;
+  periodoMetaActual: string | null;
+  metasPorMes: Rubro360MetaMes[];
   meses: Rubro360Mes[];
   skus: Rubro360Sku[];
   clientes: Rubro360Cliente[];
@@ -93,12 +101,10 @@ export interface Rubro360Data {
     promedioClientesMes: number;
     promedioCajasMes: number;
     promedioKgsMes: number;
-    promedioMontoMes: number;
-    mejorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number; monto: number } | null;
-    peorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number; monto: number } | null;
+    mejorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number } | null;
+    peorMes: { ano: number; mes: number; clientesActivados: number; kgs: number; cajas: number } | null;
     totalCajasHistorico: number;
     totalKgsHistorico: number;
-    totalMontoHistorico: number;
     clientesUnicosHistorico: number;
     clientesHabituales: number;
     oportunidadRecuperacion: number;

@@ -30,6 +30,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var server_exports = {};
 __export(server_exports, {
   authenticateToken: () => authenticateToken,
+  metasPeriodoActual: () => metasPeriodoActual,
   rateLimiter: () => rateLimiter,
   requireAdmin: () => requireAdmin
 });
@@ -362,6 +363,7 @@ if (typeof globalThis.WebSocket === "undefined") {
 var SUPABASE_URL = process.env.SUPABASE_URL || "https://nudltbgyewyiklqdyujk.supabase.co";
 var SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 var supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY ? (0, import_supabase_js.createClient)(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }) : null;
+var metasPeriodoActual = (d = /* @__PURE__ */ new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 var JWT_SECRET = process.env.JWT_SECRET || "codizulca_super_secret_jwt_key_2026_fdv_secure_token_9x8y7z";
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];
@@ -2348,7 +2350,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         ];
         cats.forEach((c) => {
           metasRows.push({
-            periodo: "2026-10",
+            periodo: metasPeriodoActual(),
             vendedor_id: vName,
             categoria: c.name,
             meta: parseInt(row[c.metaIdx]) || 0,
@@ -2405,7 +2407,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     }
     try {
       if (metasRows.length > 0) {
-        await supabase.from("metas_activacion").delete().eq("periodo", "2026-10");
+        await supabase.from("metas_activacion").delete().eq("periodo", metasPeriodoActual());
         for (let i = 0; i < metasRows.length; i += 100) {
           const batch = metasRows.slice(i, i + 100);
           await supabase.from("metas_activacion").insert(batch);
@@ -2552,13 +2554,13 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       return null;
     };
     if (role === "ADMIN") {
-      if (!q || qU === "ADMIN" || qU === "TODOS" || qU === "TODOS LOS VENDEDORES") return { all: true, names: [] };
+      if (!q || qU === "ADMIN" || qU === "TODOS" || qU === "TODOS LOS VENDEDORES") return { all: true, names: [], aliases: [] };
       if (qU.startsWith("CONSOLIDATED:")) {
         const prof = getVendorProfile(q.slice("CONSOLIDATED:".length));
-        return { all: false, names: toNames(prof.routes.flatMap((r2) => r2.aliases)) };
+        return { all: false, names: toNames(prof.routes.flatMap((r2) => r2.aliases)), aliases: prof.routes.flatMap((r2) => [r2.id, ...r2.aliases]).map(normHist) };
       }
       const r = findRoute(q);
-      return { all: false, names: toNames(r ? r.aliases : [q]) };
+      return { all: false, names: toNames(r ? r.aliases : [q]), aliases: (r ? [r.id, ...r.aliases] : [q]).map(normHist) };
     }
     const profile = getVendorProfile(String(user.username || ""));
     let routes = profile.routes;
@@ -2566,7 +2568,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const mine = routes.find((r) => r.id === q || r.aliases.some((a) => normHist(a) === normHist(q)));
       if (mine) routes = [mine];
     }
-    return { all: false, names: toNames(routes.flatMap((r) => r.aliases)) };
+    return { all: false, names: toNames(routes.flatMap((r) => r.aliases)), aliases: routes.flatMap((r) => [r.id, ...r.aliases]).map(normHist) };
   }
   const histCache = /* @__PURE__ */ new Map();
   const histCached = async (key, loader) => {
@@ -2847,6 +2849,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           carteraTotal: 0,
           activadosMesActual: 0,
           metaMesActual: 0,
+          periodoMetaActual: null,
+          metasPorMes: [],
           meses: [],
           skus: [],
           clientes: [],
@@ -2855,12 +2859,10 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             promedioClientesMes: 0,
             promedioCajasMes: 0,
             promedioKgsMes: 0,
-            promedioMontoMes: 0,
             mejorMes: null,
             peorMes: null,
             totalCajasHistorico: 0,
             totalKgsHistorico: 0,
-            totalMontoHistorico: 0,
             clientesUnicosHistorico: 0,
             clientesHabituales: 0,
             oportunidadRecuperacion: 0,
@@ -2876,7 +2878,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             () => histFetchAll((a, b) => supabase.from("hist_periodos").select("ano,mes").order("ano").order("mes").range(a, b))
           ),
           histFetchAll((a, b) => {
-            let q = supabase.from("ventas_historial").select("ano,mes,id_cliente,cliente,vendedor,id_articulo,articulo,cajas,unidades,kgs,monto").eq("rubro", rubroCode);
+            let q = supabase.from("ventas_historial").select("ano,mes,id_cliente,cliente,vendedor,id_articulo,articulo,cajas,unidades,kgs").eq("rubro", rubroCode);
             if (!scope.all) q = q.in("vendedor", scope.names);
             return q.order("ano").order("mes").order("id_cliente").order("id_articulo").range(a, b);
           }),
@@ -2920,15 +2922,23 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         });
         const carteraTotal = carteraMap.size;
         const activadosClientesActual = [...carteraMap.values()].filter((c) => c.activoActual).length;
-        let metaMesActual = 0;
-        let activadosGridActual = 0;
+        const aliasSet = new Set(scope.aliases || []);
+        const metasPeriodoMap = /* @__PURE__ */ new Map();
         metas.forEach((m) => {
-          if (!scope.all && !allowed.has(normHist(m.vendedor_nombre))) return;
-          if (normalizeHistRubroCode(m.categoria) === rubroCode) {
-            metaMesActual += nz(m.meta);
-            activadosGridActual += nz(m.activados);
-          }
+          if (!scope.all && !aliasSet.has(normHist(m.vendedor_id))) return;
+          if (normalizeHistRubroCode(m.categoria) !== rubroCode) return;
+          const per = String(m.periodo || "");
+          if (!/^\d{4}-\d{2}$/.test(per)) return;
+          const cur = metasPeriodoMap.get(per) || { meta: 0, activados: 0 };
+          cur.meta += nz(m.meta);
+          cur.activados += nz(m.activados);
+          metasPeriodoMap.set(per, cur);
         });
+        const metasPorMes = [...metasPeriodoMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([periodo, v]) => ({ periodo, ano: Number(periodo.slice(0, 4)), mes: Number(periodo.slice(5, 7)), meta: v.meta, activados: v.activados }));
+        const periodoMetaActual = metasPorMes.length > 0 ? metasPorMes[metasPorMes.length - 1].periodo : null;
+        const metaActualRow = metasPorMes.length > 0 ? metasPorMes[metasPorMes.length - 1] : null;
+        const metaMesActual = metaActualRow ? metaActualRow.meta : 0;
+        const activadosGridActual = metaActualRow ? metaActualRow.activados : 0;
         const activadosMesActual = activadosGridActual > 0 ? activadosGridActual : activadosClientesActual;
         const sortedPeriodos = [...periodos].sort((a, b) => a.ano - b.ano || a.mes - b.mes);
         const mesAggMap = /* @__PURE__ */ new Map();
@@ -2940,8 +2950,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             skusSet: /* @__PURE__ */ new Set(),
             cajas: 0,
             unidades: 0,
-            kgs: 0,
-            monto: 0
+            kgs: 0
           });
         });
         const skuAggMap = /* @__PURE__ */ new Map();
@@ -2953,7 +2962,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             vendedor: cInfo.vendedor,
             totalCajas: 0,
             totalKgs: 0,
-            totalMonto: 0,
             porMes: /* @__PURE__ */ new Map()
           });
         });
@@ -2961,19 +2969,17 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           const pKey = `${r.ano}-${r.mes}`;
           let mAgg = mesAggMap.get(pKey);
           if (!mAgg) {
-            mAgg = { ano: r.ano, mes: r.mes, clientCajas: /* @__PURE__ */ new Map(), skusSet: /* @__PURE__ */ new Set(), cajas: 0, unidades: 0, kgs: 0, monto: 0 };
+            mAgg = { ano: r.ano, mes: r.mes, clientCajas: /* @__PURE__ */ new Map(), skusSet: /* @__PURE__ */ new Set(), cajas: 0, unidades: 0, kgs: 0 };
             mesAggMap.set(pKey, mAgg);
           }
           const normCid = String(r.id_cliente || "").trim().replace(/^#/, "").replace(/^0+/, "");
           const cajas = nz(r.cajas);
           const unidades = nz(r.unidades);
           const kgs = nz(r.kgs);
-          const monto = nz(r.monto);
           const sku = String(r.id_articulo || "").trim();
           mAgg.cajas += cajas;
           mAgg.unidades += unidades;
           mAgg.kgs += kgs;
-          mAgg.monto += monto;
           if (normCid) {
             mAgg.clientCajas.set(normCid, (mAgg.clientCajas.get(normCid) || 0) + cajas);
           }
@@ -2989,7 +2995,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                 totalCajas: 0,
                 totalUnidades: 0,
                 totalKgs: 0,
-                totalMonto: 0,
                 allClients: /* @__PURE__ */ new Map(),
                 porMes: /* @__PURE__ */ new Map()
               };
@@ -2998,18 +3003,16 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             sAgg.totalCajas += cajas;
             sAgg.totalUnidades += unidades;
             sAgg.totalKgs += kgs;
-            sAgg.totalMonto += monto;
             if (normCid) {
               sAgg.allClients.set(normCid, (sAgg.allClients.get(normCid) || 0) + cajas);
             }
             let sm = sAgg.porMes.get(pKey);
             if (!sm) {
-              sm = { cajas: 0, kgs: 0, monto: 0, clientCajas: /* @__PURE__ */ new Map() };
+              sm = { cajas: 0, kgs: 0, clientCajas: /* @__PURE__ */ new Map() };
               sAgg.porMes.set(pKey, sm);
             }
             sm.cajas += cajas;
             sm.kgs += kgs;
-            sm.monto += monto;
             if (normCid) {
               sm.clientCajas.set(normCid, (sm.clientCajas.get(normCid) || 0) + cajas);
             }
@@ -3023,7 +3026,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                 vendedor: String(r.vendedor || "").trim(),
                 totalCajas: 0,
                 totalKgs: 0,
-                totalMonto: 0,
                 porMes: /* @__PURE__ */ new Map()
               };
               cliAggMap.set(normCid, cAgg);
@@ -3033,15 +3035,13 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             }
             cAgg.totalCajas += cajas;
             cAgg.totalKgs += kgs;
-            cAgg.totalMonto += monto;
             let cm = cAgg.porMes.get(pKey);
             if (!cm) {
-              cm = { cajas: 0, kgs: 0, monto: 0 };
+              cm = { cajas: 0, kgs: 0 };
               cAgg.porMes.set(pKey, cm);
             }
             cm.cajas += cajas;
             cm.kgs += kgs;
-            cm.monto += monto;
           }
         });
         const mesesList = [];
@@ -3061,6 +3061,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           const variacionClientes = prev !== null ? clientesActivados - prev.clientesActivados : null;
           const variacionPct = prev !== null && prev.clientesActivados > 0 ? +((clientesActivados - prev.clientesActivados) / prev.clientesActivados * 100).toFixed(1) : null;
           const porcentajeCartera = carteraTotal > 0 ? +(clientesActivados / carteraTotal * 100).toFixed(1) : 0;
+          const metaReg = metasPeriodoMap.get(`${mAgg.ano}-${String(mAgg.mes).padStart(2, "0")}`);
           mesesList.push({
             ano: mAgg.ano,
             mes: mAgg.mes,
@@ -3073,10 +3074,9 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             cajas: +mAgg.cajas.toFixed(2),
             unidades: +mAgg.unidades.toFixed(2),
             kgs: +mAgg.kgs.toFixed(2),
-            monto: +mAgg.monto.toFixed(2),
             skusActivos: mAgg.skusSet.size,
             kgsPorCliente: clientesActivados > 0 ? +(mAgg.kgs / clientesActivados).toFixed(2) : 0,
-            ticketPromedio: clientesActivados > 0 ? +(mAgg.monto / clientesActivados).toFixed(2) : 0
+            meta: metaReg ? metaReg.meta : null
           });
         });
         const skusList = [...skuAggMap.values()].map((s) => {
@@ -3091,7 +3091,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             porMesObj[pk] = {
               cajas: +sm.cajas.toFixed(2),
               kgs: +sm.kgs.toFixed(2),
-              monto: +sm.monto.toFixed(2),
               clientes: cliAct
             };
           });
@@ -3105,7 +3104,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             totalCajas: +s.totalCajas.toFixed(2),
             totalUnidades: +s.totalUnidades.toFixed(2),
             totalKgs: +s.totalKgs.toFixed(2),
-            totalMonto: +s.totalMonto.toFixed(2),
             clientesUnicos,
             mesesActivos,
             porMes: porMesObj
@@ -3129,14 +3127,13 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             const cm = c.porMes.get(pk);
             const cajas = cm ? +cm.cajas.toFixed(2) : 0;
             const kgs = cm ? +cm.kgs.toFixed(2) : 0;
-            const monto = cm ? +cm.monto.toFixed(2) : 0;
             const activo = cajas > 0;
             if (activo) {
               mesesActivados++;
               ultimoMesCompra = { ano: mAgg.ano, mes: mAgg.mes };
             }
-            if (cajas !== 0 || kgs !== 0 || monto !== 0) {
-              porMesObj[pk] = { cajas, kgs, monto, activo };
+            if (cajas !== 0 || kgs !== 0) {
+              porMesObj[pk] = { cajas, kgs, activo };
             }
           });
           if (mesesActivados > 0) clientesUnicosHistorico++;
@@ -3168,7 +3165,6 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             ultimoMesCompra,
             totalCajas: +c.totalCajas.toFixed(2),
             totalKgs: +c.totalKgs.toFixed(2),
-            totalMonto: +c.totalMonto.toFixed(2),
             estado360,
             porMes: porMesObj
           };
@@ -3186,12 +3182,10 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         const clientesList = scope.all ? allClientesList.filter((c, i) => c.mesesActivados > 0 || c.activoMesActual || i < 600) : allClientesList;
         const totalCajasHistorico = +mesesList.reduce((acc, m) => acc + m.cajas, 0).toFixed(2);
         const totalKgsHistorico = +mesesList.reduce((acc, m) => acc + m.kgs, 0).toFixed(2);
-        const totalMontoHistorico = +mesesList.reduce((acc, m) => acc + m.monto, 0).toFixed(2);
         const nMeses = mesesList.length || 1;
         const promedioClientesMes = +(mesesList.reduce((acc, m) => acc + m.clientesActivados, 0) / nMeses).toFixed(1);
         const promedioCajasMes = +(totalCajasHistorico / nMeses).toFixed(1);
         const promedioKgsMes = +(totalKgsHistorico / nMeses).toFixed(1);
-        const promedioMontoMes = +(totalMontoHistorico / nMeses).toFixed(2);
         const sortedByCli = [...mesesList].sort((a, b) => b.clientesActivados - a.clientesActivados || b.kgs - a.kgs);
         const mejorMes = sortedByCli.length > 0 ? sortedByCli[0] : null;
         const peorMes = sortedByCli.length > 0 ? sortedByCli[sortedByCli.length - 1] : null;
@@ -3201,6 +3195,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           carteraTotal,
           activadosMesActual,
           metaMesActual,
+          periodoMetaActual,
+          metasPorMes,
           meses: mesesList,
           skus: skusList,
           clientes: clientesList,
@@ -3209,12 +3205,10 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             promedioClientesMes,
             promedioCajasMes,
             promedioKgsMes,
-            promedioMontoMes,
-            mejorMes: mejorMes ? { ano: mejorMes.ano, mes: mejorMes.mes, clientesActivados: mejorMes.clientesActivados, kgs: mejorMes.kgs, cajas: mejorMes.cajas, monto: mejorMes.monto } : null,
-            peorMes: peorMes ? { ano: peorMes.ano, mes: peorMes.mes, clientesActivados: peorMes.clientesActivados, kgs: peorMes.kgs, cajas: peorMes.cajas, monto: peorMes.monto } : null,
+            mejorMes: mejorMes ? { ano: mejorMes.ano, mes: mejorMes.mes, clientesActivados: mejorMes.clientesActivados, kgs: mejorMes.kgs, cajas: mejorMes.cajas } : null,
+            peorMes: peorMes ? { ano: peorMes.ano, mes: peorMes.mes, clientesActivados: peorMes.clientesActivados, kgs: peorMes.kgs, cajas: peorMes.cajas } : null,
             totalCajasHistorico,
             totalKgsHistorico,
-            totalMontoHistorico,
             clientesUnicosHistorico,
             clientesHabituales,
             oportunidadRecuperacion,
@@ -3615,7 +3609,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       }
       if (!force && supabase) {
         try {
-          const { data, error } = await supabase.from("metas_activacion").select("*").eq("periodo", "2026-10");
+          const { data, error } = await supabase.from("metas_activacion").select("*").eq("periodo", metasPeriodoActual());
           if (!error && data && data.length > 0) {
             const mapped = data.map((r) => ({
               vendedorId: r.vendedor_id,
@@ -3728,6 +3722,7 @@ startServer().catch((err) => {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   authenticateToken,
+  metasPeriodoActual,
   rateLimiter,
   requireAdmin
 });
