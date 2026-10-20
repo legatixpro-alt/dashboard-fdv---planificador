@@ -143,6 +143,32 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const isEnRitmo = ritmoActual >= ritmoRequerido;
   const totalCartera = (faltantesPorActivar + cienPorCientoActivados) || totalClientes || 1;
 
+  const clienteActivoEnRubro = (
+    c: {
+      hasAceite: boolean;
+      hasAzucar: boolean;
+      hasPollo: boolean;
+      hasEstandarAsturias: boolean;
+      hasMortadelaSalpicao: boolean;
+    },
+    rubro: RubroCodigo
+  ): boolean => {
+    switch (rubro) {
+      case 'ACEITE':
+        return c.hasAceite;
+      case 'AZUCAR':
+        return c.hasAzucar;
+      case 'POLLO':
+        return c.hasPollo;
+      case 'ESTANDAR_ASTURIAS':
+        return c.hasEstandarAsturias;
+      case 'MORTADELA_SALPICAO':
+        return c.hasMortadelaSalpicao;
+      default:
+        return false;
+    }
+  };
+
   const displayedClients = useMemo(() => {
     const term = (searchTerm || '').trim().toLowerCase();
     return clientList
@@ -152,8 +178,13 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         const codeMatch = (c.codigo || '').toLowerCase().includes(term);
         return nameMatch || codeMatch;
       })
-      .filter(c => viewMode === 'personal' ? c.cobertura < 5 : true);
-  }, [clientList, searchTerm, viewMode]);
+      .filter(c => {
+        if (selectedRubros.length > 0) {
+          return selectedRubros.some((r) => clienteActivoEnRubro(c, r));
+        }
+        return viewMode === 'personal' ? c.cobertura < 5 : true;
+      });
+  }, [clientList, searchTerm, viewMode, selectedRubros]);
   
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -203,12 +234,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     doc.text(`${ritmoRequerido.toFixed(1)} cli/d`, 125, 46);
     doc.text(`${cienPorCientoActivados} cli`, 160, 46);
 
-    const filteredList = clientList.filter(c => 
-      (c.razonSocial || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
-      (c.codigo || '').toLowerCase().includes((searchTerm || '').toLowerCase())
-    );
-
-    const tableData = filteredList.map((client) => [
+    const tableData = displayedClients.map((client) => [
       client.codigo,
       client.razonSocial,
       client.hasAceite ? 'SI' : '-',
@@ -534,7 +560,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  Detalle de Cobertura por Cliente
                </h2>
                <p className="text-[11px] font-sans text-neutral-400">
-                 Tilda uno o varios rubros (selección múltiple) para desplegar su <strong>Dashboard 360° Histórico de Ventas y Activación</strong>.
+                 Tilda uno o varios rubros (selección múltiple) para <strong>filtrar los clientes activos en ese rubro</strong> y desplegar su <strong>Dashboard 360° Histórico</strong>.
                </p>
              </div>
            </div>
@@ -578,6 +604,25 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            </div>
          )}
 
+         {selectedRubros.length > 0 && (
+           <div className="px-4 py-2.5 bg-emerald-950/25 border-b border-emerald-900/40 flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
+             <div className="flex flex-wrap items-center gap-1.5 text-emerald-300">
+               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+               <span>
+                 Mostrando <strong>{displayedClients.length}</strong> {displayedClients.length === 1 ? 'cliente activo' : 'clientes activos'} en:{' '}
+                 <strong>{selectedRubros.map((r) => RUBRO_LABEL[r]).join(', ')}</strong>
+               </span>
+             </div>
+             <button
+               type="button"
+               onClick={() => setSelectedRubros([])}
+               className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 transition-colors cursor-pointer"
+             >
+               Ver todos los clientes ({totalClientes})
+             </button>
+           </div>
+         )}
+
          {/* Desktop View: Table */}
          {viewMode !== 'tarjetas' && (<div className="hidden md:block overflow-x-auto">
            <table className="w-full text-left border-collapse min-w-[900px]">
@@ -585,19 +630,19 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  <tr className="bg-[#b90000] text-[10px] font-sans text-white uppercase tracking-wider">
                    <th className="p-3 font-bold border-r border-[#a00000] w-20 text-center">Codigo</th>
                    <th className="p-3 font-bold border-r border-[#a00000]">Razon Social</th>
-                   <th onClick={() => toggleRubro360('ACEITE', true)} title="Tildar para ver Historial 360° de Aceite" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                   <th onClick={() => toggleRubro360('ACEITE')} title="Filtrar clientes activos y ver Historial 360° de Aceite" className={`p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer transition-colors ${selectedRubros.includes('ACEITE') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('ACEITE') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Aceite</span>
                    </th>
-                   <th onClick={() => toggleRubro360('AZUCAR', true)} title="Tildar para ver Historial 360° de Azúcar" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                   <th onClick={() => toggleRubro360('AZUCAR')} title="Filtrar clientes activos y ver Historial 360° de Azúcar" className={`p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer transition-colors ${selectedRubros.includes('AZUCAR') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('AZUCAR') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Azúcar</span>
                    </th>
-                   <th onClick={() => toggleRubro360('POLLO', true)} title="Tildar para ver Historial 360° de Pollo" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
+                   <th onClick={() => toggleRubro360('POLLO')} title="Filtrar clientes activos y ver Historial 360° de Pollo" className={`p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer transition-colors ${selectedRubros.includes('POLLO') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('POLLO') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Pollo</span>
                    </th>
-                   <th onClick={() => toggleRubro360('ESTANDAR_ASTURIAS', true)} title="Tildar para ver Historial 360° de Est. y Sup. Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[120px] cursor-pointer hover:bg-red-800 transition-colors">
+                   <th onClick={() => toggleRubro360('ESTANDAR_ASTURIAS')} title="Filtrar clientes activos y ver Historial 360° de Est. y Sup. Asturias" className={`p-3 font-bold text-center border-r border-[#a00000] min-w-[120px] cursor-pointer transition-colors ${selectedRubros.includes('ESTANDAR_ASTURIAS') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('ESTANDAR_ASTURIAS') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Est. y Sup. Asturias</span>
                    </th>
-                   <th onClick={() => toggleRubro360('MORTADELA_SALPICAO', true)} title="Tildar para ver Historial 360° de Mort. Salpicao y Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[130px] cursor-pointer hover:bg-red-800 transition-colors">
+                   <th onClick={() => toggleRubro360('MORTADELA_SALPICAO')} title="Filtrar clientes activos y ver Historial 360° de Mort. Salpicao y Asturias" className={`p-3 font-bold text-center border-r border-[#a00000] min-w-[130px] cursor-pointer transition-colors ${selectedRubros.includes('MORTADELA_SALPICAO') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('MORTADELA_SALPICAO') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Mort. Salpicao y Asturias</span>
                    </th>
                    <th className="p-3 font-bold text-center w-32">Cobertura</th>
