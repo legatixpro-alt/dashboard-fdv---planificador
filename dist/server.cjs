@@ -699,72 +699,117 @@ async function startServer() {
       }
     });
   });
+  const EXCLUDED_TEST_DEG_IDS = /* @__PURE__ */ new Set([
+    "deg-001",
+    "deg-002",
+    "deg-003",
+    "deg-mupk8tih-e3wf",
+    "deg-muplzpkm-ncuu",
+    "test-ping-01"
+  ]);
+  function normalizeDegustacionRecord(raw) {
+    const cleanId = String(raw.id || raw.degustacionId || "").replace(/^DEG-/, "");
+    return {
+      id: cleanId,
+      clienteCodigo: raw.clienteCodigo || raw.cliente_codigo || "PDV",
+      clienteNombre: raw.clienteNombre || raw.cliente_nombre || raw.client || "Punto de Venta",
+      vendedorNombre: raw.vendedorNombre || raw.vendedor_nombre || raw.vendedor || "Vendedor",
+      vendedorId: raw.vendedorId || raw.vendedor_id || raw.ruta || "1",
+      vendedorEmail: raw.vendedorEmail || raw.vendedor_email || void 0,
+      ruta: raw.ruta || raw.zone || raw.vendedorId || raw.vendedor_id || "",
+      fecha: raw.fecha || raw.date || "",
+      turno: raw.turno || "MA\xD1ANA",
+      hora: raw.hora || raw.time || "",
+      productos: Array.isArray(raw.productos) ? raw.productos : typeof raw.productos === "string" && raw.productos ? raw.productos.split(",").map((s) => s.trim()) : [],
+      kilosEstimados: Number(raw.kilosEstimados ?? raw.kilos_estimados) || 0,
+      personasEstimadas: Number(raw.personasEstimadas ?? raw.personas_estimadas) || 150,
+      requierePromotora: Boolean(raw.requierePromotora ?? raw.requiere_promotora ?? true),
+      promotoraAsignada: raw.promotoraAsignada || raw.promotora_asignada || "",
+      materialPop: Boolean(raw.materialPop ?? raw.material_pop ?? true),
+      contactoPunto: raw.contactoPunto || raw.contacto_punto || "",
+      telefonoContacto: raw.telefonoContacto || raw.telefono_contacto || "",
+      observaciones: raw.observaciones || "",
+      estado: raw.estado || "SOLICITADA",
+      notasTradeMarketing: raw.notasTradeMarketing || raw.notas_trade_marketing || "",
+      resultado: raw.resultado || null,
+      createdAt: raw.createdAt || raw.created_at || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  function sortDegustacionesServer(list, ascending = false) {
+    const shiftRank = (turno, hora) => {
+      const t = String(turno || "").toUpperCase().trim();
+      const h = String(hora || "").toUpperCase().trim();
+      if (t === "MA\xD1ANA" || t === "MANANA" || h.includes("09:") || h.includes("9:") || h.includes("AM")) return 1;
+      if (t === "TARDE" || h.includes("02:") || h.includes("14:") || h.includes("04:") || h.includes("PM")) return 2;
+      return 3;
+    };
+    const toIsoDate = (raw) => {
+      const s = String(raw || "").trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+        const [d, m, y] = s.split("/");
+        return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+      }
+      return s;
+    };
+    return [...list].sort((a, b) => {
+      const dateA = toIsoDate(a.fecha || a.date);
+      const dateB = toIsoDate(b.fecha || b.date);
+      if (dateA !== dateB) {
+        return ascending ? dateA.localeCompare(dateB) : dateB.localeCompare(dateA);
+      }
+      const rankA = shiftRank(a.turno, a.hora || a.time);
+      const rankB = shiftRank(b.turno, b.hora || b.time);
+      if (rankA !== rankB) {
+        return ascending ? rankB - rankA : rankA - rankB;
+      }
+      const vendA = String(a.vendedorNombre || a.vendedor || "").toUpperCase().trim();
+      const vendB = String(b.vendedorNombre || b.vendedor || "").toUpperCase().trim();
+      if (vendA !== vendB) {
+        return ascending ? vendB.localeCompare(vendA, "es") : vendA.localeCompare(vendB, "es");
+      }
+      const cliA = String(a.clienteNombre || a.client || "").toUpperCase().trim();
+      const cliB = String(b.clienteNombre || b.client || "").toUpperCase().trim();
+      if (cliA !== cliB) {
+        return ascending ? cliB.localeCompare(cliA, "es") : cliA.localeCompare(cliB, "es");
+      }
+      return ascending ? String(b.id || "").localeCompare(String(a.id || "")) : String(a.id || "").localeCompare(String(b.id || ""));
+    });
+  }
+  async function loadAllMergedDegustaciones() {
+    const mapById = /* @__PURE__ */ new Map();
+    if (supabase) {
+      try {
+        const { data: supaList, error: supaErr } = await supabase.from("degustaciones").select("*").order("fecha", { ascending: false });
+        if (!supaErr && Array.isArray(supaList)) {
+          for (const row of supaList) {
+            const norm = normalizeDegustacionRecord(row);
+            if (norm.id && !EXCLUDED_TEST_DEG_IDS.has(norm.id) && !norm.id.startsWith("test-")) {
+              mapById.set(norm.id, norm);
+            }
+          }
+        }
+      } catch (_) {
+      }
+    }
+    try {
+      const snapshot = await (0, import_firestore2.getDocs)((0, import_firestore2.collection)(db, "degustaciones"));
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data && data.clienteNombre) {
+          const norm = normalizeDegustacionRecord({ id: docSnap.id, ...data });
+          if (norm.id && !EXCLUDED_TEST_DEG_IDS.has(norm.id) && !norm.id.startsWith("test-")) {
+            mapById.set(norm.id, norm);
+          }
+        }
+      });
+    } catch (_) {
+    }
+    return sortDegustacionesServer(Array.from(mapById.values()), false);
+  }
   app2.get("/api/degustaciones", async (req, res) => {
     try {
-      if (supabase) {
-        try {
-          let query = supabase.from("degustaciones").select("*");
-          if (req.query.vendedor) {
-            query = query.ilike("vendedor_nombre", `%${req.query.vendedor}%`);
-          }
-          if (req.query.estado) {
-            query = query.eq("estado", String(req.query.estado).toUpperCase().trim());
-          }
-          if (req.query.fecha) {
-            query = query.eq("fecha", String(req.query.fecha).trim());
-          }
-          const { data: supaList, error: supaErr } = await query.order("fecha", { ascending: false });
-          if (!supaErr && Array.isArray(supaList) && supaList.length > 0) {
-            const mapped = supaList.map((d) => ({
-              id: d.id,
-              clienteCodigo: d.cliente_codigo || "PDV",
-              clienteNombre: d.cliente_nombre,
-              vendedorNombre: d.vendedor_nombre,
-              vendedorId: d.vendedor_id,
-              vendedorEmail: d.vendedor_email,
-              ruta: d.ruta,
-              fecha: d.fecha,
-              turno: d.turno,
-              hora: d.hora,
-              productos: d.productos,
-              kilosEstimados: Number(d.kilos_estimados) || 0,
-              personasEstimadas: Number(d.personas_estimadas) || 0,
-              requierePromotora: Boolean(d.requiere_promotora),
-              promotoraAsignada: d.promotora_asignada,
-              materialPop: Boolean(d.material_pop),
-              contactoPunto: d.contacto_punto,
-              telefonoContacto: d.telefono_contacto,
-              observaciones: d.observaciones,
-              estado: d.estado,
-              notasTradeMarketing: d.notas_trade_marketing,
-              resultado: d.resultado,
-              createdAt: d.created_at
-            }));
-            return res.json({
-              success: true,
-              count: mapped.length,
-              data: mapped,
-              source: "supabase"
-            });
-          }
-        } catch (supaErr) {
-        }
-      }
-      let list = [];
-      try {
-        const snapshot = await (0, import_firestore2.getDocs)((0, import_firestore2.collection)(db, "degustaciones"));
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (data && data.clienteNombre) {
-            list.push({
-              id: docSnap.id,
-              ...data
-            });
-          }
-        });
-      } catch (fsErr) {
-        console.warn("[SERVER] Fallback Firestore degustaciones no disponible (modo offline):", fsErr?.message);
-      }
+      let list = await loadAllMergedDegustaciones();
       if (req.query.vendedor) {
         const v = String(req.query.vendedor).toUpperCase().trim();
         list = list.filter(
@@ -779,12 +824,11 @@ async function startServer() {
         const f = String(req.query.fecha).trim();
         list = list.filter((d) => d.fecha === f);
       }
-      list.sort((a, b) => new Date(b.fecha || 0).getTime() - new Date(a.fecha || 0).getTime());
       res.json({
         success: true,
         count: list.length,
         data: list,
-        source: "firestore"
+        source: "merged_ordered"
       });
     } catch (err) {
       console.error("Error fetching degustaciones via API:", err);
@@ -792,19 +836,76 @@ async function startServer() {
     }
   });
   const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.VITE_GOOGLE_SHEETS_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbx6JMUR1IubQuZ97Ics7emw_I0G9UAy-5vig4Vl8zPwW8yMBbZldvQGeGOPNiNbUmVTaQ/exec";
+  const GERENCIA_TRADE_API_URL = process.env.GERENCIA_TRADE_API_URL || "https://codizulca-dashboard-4.onrender.com/api/degustaciones";
+  const GERENCIA_UTERIO_SURVEYS_URL = "https://uterioexpfweghxfbvoa.supabase.co/rest/v1/surveys";
+  const GERENCIA_UTERIO_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZXJpb2V4cGZ3ZWdoeGZidm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NTg3ODYsImV4cCI6MjEwMzUzNDc4Nn0.bZnN4vrXUDlcoIaI7l39O-bU4GQp05SvJdio_cn6niI";
   const GERENCIA_SUPABASE_SURVEYS_URL = process.env.GERENCIA_SUPABASE_SURVEYS_URL || process.env.VITE_GERENCIA_SUPABASE_SURVEYS_URL || "https://nudltbgyewyiklqdyujk.supabase.co/rest/v1/surveys";
   const GERENCIA_SUPABASE_ANON_KEY = process.env.GERENCIA_SUPABASE_ANON_KEY || process.env.VITE_GERENCIA_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51ZGx0Ymd5ZXd5aWtscWR5dWprIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTgzMDA3OCwiZXhwIjoyMTA3NDA2MDc4fQ.k92vdZiuVkTzAWNK8Fq71m1Xi_MoWtpx_eRQcZTw1cA";
   const PEDIDOS_MANUALES_SUPABASE_URL = process.env.PEDIDOS_MANUALES_SUPABASE_URL || "https://vxduxyrbeybhhbpdyqoc.supabase.co";
   const PEDIDOS_MANUALES_SUPABASE_KEY = process.env.PEDIDOS_MANUALES_SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4ZHV4eXJiZXliaGhicGR5cW9jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwNzUxNTgsImV4cCI6MjEwNjY1MTE1OH0.sOgUaTLZ0NhlVYSLukAysyxRzggAicjM4n-u4H8NrQ4";
+  function buildTradeMarketingItemServer(rawItem, existingRemote) {
+    const item = normalizeDegustacionRecord(rawItem);
+    const recordId = `DEG-${item.id}`;
+    let dmyDate = String(item.fecha || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dmyDate)) {
+      const [y, m, day] = dmyDate.split("-");
+      dmyDate = `${day}/${m}/${y}`;
+    }
+    const timeStr = item.hora && item.hora.trim() ? item.hora.trim() : item.turno === "TARDE" ? "02:00 PM - 07:00 PM" : "09:00 AM - 01:00 PM";
+    const productStr = Array.isArray(item.productos) && item.productos.length > 0 ? item.productos.join(", ") : item.productos || "MORTADELA";
+    const vendedorName = String(item.vendedorNombre || "VENDEDOR COMERCIAL").trim();
+    const clientName = String(item.clienteNombre || "Punto de Venta").trim();
+    const zoneName = String(item.ruta || item.vendedorId || vendedorName || "Ruta Comercial").trim();
+    const kilosNum = Number(item.kilosEstimados) || 5;
+    const targetNum = Number(item.personasEstimadas) || 150;
+    let status = "scheduled";
+    const norm = String(item.estado || "SOLICITADA").toUpperCase().trim();
+    if (norm === "REALIZADA" || norm === "COMPLETED") status = "completed";
+    else if (norm === "CANCELADA" || norm === "RECHAZADA" || norm === "CANCELLED") status = "cancelled";
+    if (existingRemote && existingRemote.status && existingRemote.status !== "scheduled" && status === "scheduled") {
+      status = existingRemote.status;
+    }
+    const rawPromoter = String(item.promotoraAsignada || "").trim();
+    const hasLocalAssigned = rawPromoter && !rawPromoter.toUpperCase().includes("POR ASIGNAR");
+    const hasRemoteAssigned = existingRemote?.promoter && !String(existingRemote.promoter).toUpperCase().includes("POR ASIGNAR");
+    const promoter = hasLocalAssigned ? rawPromoter : hasRemoteAssigned ? existingRemote.promoter : "POR ASIGNAR (Trade Marketing)";
+    const promoterEmail = hasRemoteAssigned ? existingRemote.promoterEmail || "" : "";
+    const promoterId = hasRemoteAssigned ? existingRemote.promoterId || "" : "";
+    const promoterRole = hasRemoteAssigned && existingRemote.promoterRole ? existingRemote.promoterRole : "Impulsadora";
+    const contactPrefix = item.contactoPunto ? `Contacto en tienda: ${item.contactoPunto.trim()}${item.telefonoContacto ? ` (${item.telefonoContacto.trim()})` : ""}. ` : "";
+    const obsClean = String(item.observaciones || "").trim();
+    const bodyNote = obsClean ? obsClean : `Agendada por ${vendedorName}. Kilos: ${kilosNum}. Personas: ${targetNum}.`;
+    const fullComments = `${contactPrefix}${bodyNote}`.trim();
+    return {
+      id: recordId,
+      date: dmyDate,
+      time: timeStr,
+      activity: `Degustaci\xF3n ${productStr} - Solicitada por ${vendedorName}`,
+      product: productStr,
+      promoter,
+      ...promoterEmail ? { promoterEmail } : {},
+      ...promoterId ? { promoterId } : {},
+      promoterRole,
+      client: clientName,
+      zone: zoneName,
+      vendedor: vendedorName,
+      source: "vendedor_app",
+      status,
+      delivered: Number(item.resultado?.personasAlcanzadas || existingRemote?.delivered || 0),
+      target: targetNum,
+      acceptanceRate: Number(existingRemote?.acceptanceRate || (status === "completed" ? 95 : 0)),
+      comments: fullComments
+    };
+  }
   function syncToTradeMarketingJson(itemOrList) {
     try {
-      const items = Array.isArray(itemOrList) ? itemOrList : [itemOrList];
-      const gerenciaPath = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (3)/data_degustaciones.json");
+      const items = sortDegustacionesServer(Array.isArray(itemOrList) ? itemOrList : [itemOrList], false);
+      const gerencia3Path = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (3)/data_degustaciones.json");
+      const gerencia4Path = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (4)/data_degustaciones.json");
       const localPath = import_path.default.resolve(process.cwd(), "data_degustaciones.json");
       const targetPaths = [localPath];
-      if (import_fs.default.existsSync(import_path.default.dirname(gerenciaPath))) {
-        targetPaths.push(gerenciaPath);
-      }
+      if (import_fs.default.existsSync(import_path.default.dirname(gerencia3Path))) targetPaths.push(gerencia3Path);
+      if (import_fs.default.existsSync(import_path.default.dirname(gerencia4Path))) targetPaths.push(gerencia4Path);
       for (const tPath of targetPaths) {
         let existing = [];
         try {
@@ -813,58 +914,52 @@ async function startServer() {
           }
         } catch (_) {
         }
-        const map = /* @__PURE__ */ new Map();
+        const existingMap = /* @__PURE__ */ new Map();
+        const historicalItems = [];
         existing.forEach((e) => {
-          if (e && e.id) map.set(e.id, e);
+          if (!e || !e.id) return;
+          const normId = String(e.id).startsWith("DEG-") ? String(e.id) : `DEG-${e.id}`;
+          existingMap.set(normId, e);
+          if (String(e.id).startsWith("DEG-HIST-")) {
+            historicalItems.push(e);
+          }
         });
-        for (const item of items) {
-          if (!item || !item.id) continue;
-          let dmyDate = item.fecha || item.date;
-          if (dmyDate && /^\d{4}-\d{2}-\d{2}$/.test(dmyDate)) {
-            const [y, m, day] = dmyDate.split("-");
-            dmyDate = `${day}/${m}/${y}`;
-          }
-          let timeStr = item.hora || item.time;
-          if (!timeStr || !timeStr.trim()) {
-            if (item.turno === "MA\xD1ANA") timeStr = "09:00 - 13:00";
-            else if (item.turno === "TARDE") timeStr = "14:00 - 18:00";
-            else timeStr = "09:00 - 18:00";
-          }
-          const productStr = Array.isArray(item.productos) ? item.productos.join(", ") : item.productos || item.product || "Embutidos y Refrigerados";
-          let status = "scheduled";
-          const norm = (item.estado || item.status || "SOLICITADA").toUpperCase().trim();
-          if (norm === "REALIZADA" || norm === "COMPLETED") status = "completed";
-          else if (norm === "CANCELADA" || norm === "RECHAZADA" || norm === "CANCELLED") status = "cancelled";
-          const promoter = item.promotoraAsignada || item.promotora_asignada || item.promoter || item.vendedorNombre || item.vendedor_nombre || "Por Asignar";
-          const promoterRole = item.requierePromotora || item.requiere_promotora ? "Promotora" : "Impulsadora";
-          const target = Number(item.personasEstimadas || item.personas_estimadas) || Math.round((Number(item.kilosEstimados || item.kilos_estimados) || 1) * 35) || 140;
-          const delivered = item.resultado?.porcionesEntregadas || item.delivered || 0;
-          const acceptance = item.resultado?.porcentajeAceptacion || item.acceptanceRate || (status === "completed" ? 95 : 0);
-          const notes = [
-            item.observaciones || item.notes,
-            item.notasTradeMarketing || item.notas_trade_marketing ? `Notas Trade: ${item.notasTradeMarketing || item.notas_trade_marketing}` : "",
-            `Vendedor: ${item.vendedorNombre || item.vendedor_nombre || ""}`,
-            item.contactoPunto || item.contacto_punto ? `Contacto: ${item.contactoPunto || item.contacto_punto} (${item.telefonoContacto || item.telefono_contacto || ""})` : ""
-          ].filter(Boolean).join(" | ");
-          map.set(item.id, {
-            id: item.id,
-            date: dmyDate,
-            time: timeStr,
-            activity: `Impulso y Degustaci\xF3n ${productStr} - ${item.clienteNombre || item.cliente_nombre || item.client}`,
-            product: productStr,
-            promoter,
-            promoterRole,
-            client: item.clienteNombre || item.cliente_nombre || item.client,
-            zone: item.ruta || item.vendedorNombre || item.vendedor_nombre || "Maracaibo",
-            status,
-            delivered,
-            target,
-            acceptanceRate: acceptance,
-            comments: notes
+        const updatedVendorMap = /* @__PURE__ */ new Map();
+        if (!Array.isArray(itemOrList)) {
+          existing.forEach((e) => {
+            if (e && e.id && !String(e.id).startsWith("DEG-HIST-")) {
+              const normId = String(e.id).startsWith("DEG-") ? String(e.id) : `DEG-${e.id}`;
+              updatedVendorMap.set(normId, e);
+            }
           });
         }
+        for (const rawItem of items) {
+          if (!rawItem || !rawItem.id && !rawItem.degustacionId) continue;
+          const cleanId = String(rawItem.id || rawItem.degustacionId).replace(/^DEG-/, "");
+          const degId = `DEG-${cleanId}`;
+          const built = buildTradeMarketingItemServer(rawItem, existingMap.get(degId));
+          updatedVendorMap.set(degId, built);
+        }
+        const vendorItems = Array.from(updatedVendorMap.values());
+        vendorItems.sort((a, b) => {
+          const toIso = (s) => {
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(s || "")) {
+              const [d, m, y] = s.split("/");
+              return `${y}-${m}-${d}`;
+            }
+            return s || "";
+          };
+          const dA = toIso(a.date);
+          const dB = toIso(b.date);
+          if (dA !== dB) return dB.localeCompare(dA);
+          const tA = String(a.time || "").includes("09:") ? 1 : 2;
+          const tB = String(b.time || "").includes("09:") ? 1 : 2;
+          if (tA !== tB) return tA - tB;
+          return String(a.vendedor || "").localeCompare(String(b.vendedor || ""), "es");
+        });
+        const finalJsonList = [...vendorItems, ...historicalItems];
         try {
-          import_fs.default.writeFileSync(tPath, JSON.stringify(Array.from(map.values()), null, 2), "utf8");
+          import_fs.default.writeFileSync(tPath, JSON.stringify(finalJsonList, null, 2), "utf8");
         } catch (err) {
           console.warn(`[SYNC TRADE] Error al escribir en ${tPath}:`, err?.message);
         }
@@ -875,22 +970,27 @@ async function startServer() {
   }
   function deleteFromTradeMarketingJson(id) {
     try {
-      const gerenciaPath = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (3)/data_degustaciones.json");
+      const cleanId = String(id).replace(/^DEG-/, "");
+      const degId = `DEG-${cleanId}`;
+      const gerencia3Path = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (3)/data_degustaciones.json");
+      const gerencia4Path = import_path.default.resolve(process.cwd(), "../codizulca-dashboard (4)/data_degustaciones.json");
       const localPath = import_path.default.resolve(process.cwd(), "data_degustaciones.json");
       const targetPaths = [localPath];
-      if (import_fs.default.existsSync(import_path.default.dirname(gerenciaPath))) targetPaths.push(gerenciaPath);
+      if (import_fs.default.existsSync(import_path.default.dirname(gerencia3Path))) targetPaths.push(gerencia3Path);
+      if (import_fs.default.existsSync(import_path.default.dirname(gerencia4Path))) targetPaths.push(gerencia4Path);
       for (const tPath of targetPaths) {
         if (!import_fs.default.existsSync(tPath)) continue;
         const existing = JSON.parse(import_fs.default.readFileSync(tPath, "utf8") || "[]");
-        const filtered = existing.filter((e) => e.id !== id);
+        const filtered = existing.filter((e) => e.id !== id && e.id !== cleanId && e.id !== degId);
         import_fs.default.writeFileSync(tPath, JSON.stringify(filtered, null, 2), "utf8");
       }
     } catch (e) {
       console.warn("[SYNC TRADE] Error eliminando de json Trade Marketing:", e?.message);
     }
   }
-  function buildGerenciaDirectPayload(item) {
-    const normEstado = (item.estado || item.status || "SOLICITADA").toUpperCase();
+  function buildGerenciaDirectPayload(rawItem) {
+    const item = normalizeDegustacionRecord(rawItem);
+    const normEstado = (item.estado || "SOLICITADA").toUpperCase();
     let status = "Solicitada";
     if (normEstado === "APROBADA") status = "Aprobada";
     else if (normEstado === "RECHAZADA") status = "Rechazada";
@@ -899,73 +999,74 @@ async function startServer() {
     let shift = "Ma\xF1ana (9:00 AM - 1:00 PM)";
     if (item.turno === "TARDE") shift = "Tarde (2:00 PM - 7:00 PM)";
     else if (item.turno === "COMPLETO") shift = "D\xEDa Completo";
-    const productListStr = Array.isArray(item.productos) ? item.productos.join(", ") : item.productos || item.product || "Productos";
+    const productListStr = Array.isArray(item.productos) && item.productos.length > 0 ? item.productos.join(", ") : item.productos || "MORTADELA";
+    const rawPromoter = String(item.promotoraAsignada || "").trim();
+    const promoterAssigned = rawPromoter && !rawPromoter.toUpperCase().includes("POR ASIGNAR") ? rawPromoter : "";
     const commentsObj = {
       isTasting: true,
+      source: "vendedor_app",
       degustacionId: item.id,
       id: item.id,
-      client: item.clienteNombre || item.cliente_nombre || item.client,
-      cliente: item.clienteNombre || item.cliente_nombre || item.client,
-      clienteCodigo: item.clienteCodigo || item.cliente_codigo || "PDV",
-      store: item.clienteNombre || item.cliente_nombre || item.client,
-      vendedor: item.vendedorNombre || item.vendedor_nombre || item.vendedor,
-      salesRep: item.vendedorNombre || item.vendedor_nombre || item.vendedor,
-      promoter: item.promotoraAsignada || item.promotora_asignada || item.promoter || item.vendedorNombre || item.vendedor_nombre || "Vendedor",
-      promotoraAsignada: item.promotoraAsignada || item.promotora_asignada || "",
-      ruta: item.ruta || item.vendedorId || item.vendedor_id || "",
-      date: item.fecha || item.date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+      client: item.clienteNombre,
+      cliente: item.clienteNombre,
+      clienteCodigo: item.clienteCodigo || "PDV",
+      store: item.clienteNombre,
+      vendedor: item.vendedorNombre,
+      salesRep: item.vendedorNombre,
+      promoter: promoterAssigned || "POR ASIGNAR (Trade Marketing)",
+      promotoraAsignada: promoterAssigned,
+      ruta: item.ruta || item.vendedorId || "",
+      date: item.fecha || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
       turno: item.turno || "MA\xD1ANA",
       shift,
-      time: item.hora || item.time || (item.turno === "MA\xD1ANA" ? "09:00 AM - 01:00 PM" : "02:00 PM - 07:00 PM"),
+      time: item.hora || (item.turno === "MA\xD1ANA" ? "09:00 AM - 01:00 PM" : "02:00 PM - 07:00 PM"),
       products: productListStr,
       product: productListStr,
-      kilos: Number(item.kilosEstimados || item.kilos_estimados) || 0,
-      kg: Number(item.kilosEstimados || item.kilos_estimados) || 0,
-      personas: Number(item.personasEstimadas || item.personas_estimadas) || 0,
-      personasEstimadas: Number(item.personasEstimadas || item.personas_estimadas) || 0,
+      kilos: Number(item.kilosEstimados) || 0,
+      kg: Number(item.kilosEstimados) || 0,
+      personas: Number(item.personasEstimadas) || 150,
+      personasEstimadas: Number(item.personasEstimadas) || 150,
       estado: normEstado,
       status,
-      requierePromotora: Boolean(item.requierePromotora || item.requiere_promotora),
-      promoterType: item.requierePromotora || item.requiere_promotora ? "Fija" : "Vendedor / Impulso",
-      materialPop: item.materialPop || item.material_pop ? "SI" : "NO",
-      contactoPunto: item.contactoPunto || item.contacto_punto || "",
-      telefonoContacto: item.telefonoContacto || item.telefono_contacto || "",
-      address: `Ruta: ${item.ruta || item.vendedorNombre || item.vendedor_nombre || ""} | Contacto: ${item.contactoPunto || item.contacto_punto || ""} (${item.telefonoContacto || item.telefono_contacto || ""})`,
-      notes: item.observaciones || `Agendada por ${item.vendedorNombre || item.vendedor_nombre || ""}.`,
-      originalComments: item.observaciones || `Agendada por ${item.vendedorNombre || item.vendedor_nombre || ""}.`,
-      notasTradeMarketing: item.notasTradeMarketing || item.notas_trade_marketing || "",
+      requierePromotora: Boolean(item.requierePromotora),
+      promoterType: item.requierePromotora ? "Fija" : "Vendedor / Impulso",
+      materialPop: item.materialPop ? "SI" : "NO",
+      contactoPunto: item.contactoPunto || "",
+      telefonoContacto: item.telefonoContacto || "",
+      address: `Ruta: ${item.ruta || item.vendedorNombre || ""} | Contacto: ${item.contactoPunto || ""} (${item.telefonoContacto || ""})`,
+      notes: item.observaciones || `Agendada por ${item.vendedorNombre}. Kilos: ${item.kilosEstimados || 5}. Personas: ${item.personasEstimadas || 150}.`,
+      originalComments: item.observaciones || `Agendada por ${item.vendedorNombre}. Kilos: ${item.kilosEstimados || 5}. Personas: ${item.personasEstimadas || 150}.`,
+      notasTradeMarketing: item.notasTradeMarketing || "",
       resultado: item.resultado || null
     };
     return {
       type: "Degustacion",
-      date: item.fecha || item.date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-      store: item.clienteNombre || item.cliente_nombre || item.client,
-      promoter: item.promotoraAsignada || item.promotora_asignada || item.vendedorNombre || item.vendedor_nombre || "Vendedor",
+      date: item.fecha || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+      store: item.clienteNombre,
+      promoter: promoterAssigned || item.vendedorNombre || "Vendedor",
       product: productListStr,
       comments: JSON.stringify(commentsObj)
     };
   }
-  async function syncToGerenciaDirect(item) {
+  async function upsertSurveyAtSupabase(url, apiKey, cleanId, payload) {
     try {
-      syncToTradeMarketingJson(item);
-      const payload = buildGerenciaDirectPayload(item);
-      const searchUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${item.id}*&select=id&limit=1`;
+      const searchUrl = `${url}?comments=like.*${encodeURIComponent(cleanId)}*&select=id&limit=5`;
       const searchRes = await fetch(searchUrl, {
         method: "GET",
         headers: {
-          "apikey": GERENCIA_SUPABASE_ANON_KEY,
-          "Authorization": `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+          "apikey": apiKey,
+          "Authorization": `Bearer ${apiKey}`
         }
       });
       if (searchRes.ok) {
         const records = await searchRes.json();
         if (Array.isArray(records) && records.length > 0 && records[0].id) {
-          const updateUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?id=eq.${records[0].id}`;
+          const updateUrl = `${url}?id=eq.${records[0].id}`;
           await fetch(updateUrl, {
             method: "PATCH",
             headers: {
-              "apikey": GERENCIA_SUPABASE_ANON_KEY,
-              "Authorization": `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+              "apikey": apiKey,
+              "Authorization": `Bearer ${apiKey}`,
               "Content-Type": "application/json",
               "Prefer": "return=representation"
             },
@@ -974,65 +1075,129 @@ async function startServer() {
           return;
         }
       }
-      await fetch(GERENCIA_SUPABASE_SURVEYS_URL, {
+      await fetch(url, {
         method: "POST",
         headers: {
-          "apikey": GERENCIA_SUPABASE_ANON_KEY,
-          "Authorization": `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+          "apikey": apiKey,
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "Prefer": "return=representation"
         },
         body: JSON.stringify(payload)
       });
+    } catch (_) {
+    }
+  }
+  async function syncToGerenciaDirect(item, existingRemote) {
+    try {
+      const norm = normalizeDegustacionRecord(item);
+      if (!norm.id || EXCLUDED_TEST_DEG_IDS.has(norm.id)) return;
+      syncToTradeMarketingJson(norm);
+      const tradeItem = buildTradeMarketingItemServer(norm, existingRemote);
+      const surveyPayload = buildGerenciaDirectPayload(norm);
+      await Promise.all([
+        // Enviar en vivo a https://codizulca-dashboard-4.onrender.com/api/degustaciones
+        fetch(GERENCIA_TRADE_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(tradeItem)
+        }).catch(() => {
+        }),
+        // Sincronizar en Supabase de Gerencia (uterioexpfweghxfbvoa)
+        upsertSurveyAtSupabase(GERENCIA_UTERIO_SURVEYS_URL, GERENCIA_UTERIO_ANON_KEY, norm.id, surveyPayload),
+        // Sincronizar en Supabase del Planificador (nudltbgyewyiklqdyujk)
+        upsertSurveyAtSupabase(GERENCIA_SUPABASE_SURVEYS_URL, GERENCIA_SUPABASE_ANON_KEY, norm.id, surveyPayload)
+      ]);
     } catch (err) {
       console.warn("Failed to sync directly to Gerencia:", err);
     }
   }
   async function deleteFromGerenciaDirect(id) {
     try {
-      deleteFromTradeMarketingJson(id);
-      const deleteUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${id}*`;
-      await fetch(deleteUrl, {
-        method: "DELETE",
-        headers: {
-          "apikey": GERENCIA_SUPABASE_ANON_KEY,
-          "Authorization": `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
-        }
-      });
+      const cleanId = String(id).replace(/^DEG-/, "");
+      const degId = `DEG-${cleanId}`;
+      deleteFromTradeMarketingJson(cleanId);
+      await Promise.all([
+        fetch(`${GERENCIA_TRADE_API_URL}/${encodeURIComponent(degId)}`, { method: "DELETE" }).catch(() => {
+        }),
+        fetch(`${GERENCIA_UTERIO_SURVEYS_URL}?comments=like.*${encodeURIComponent(cleanId)}*`, {
+          method: "DELETE",
+          headers: {
+            "apikey": GERENCIA_UTERIO_ANON_KEY,
+            "Authorization": `Bearer ${GERENCIA_UTERIO_ANON_KEY}`
+          }
+        }).catch(() => {
+        }),
+        fetch(`${GERENCIA_SUPABASE_SURVEYS_URL}?comments=like.*${encodeURIComponent(cleanId)}*`, {
+          method: "DELETE",
+          headers: {
+            "apikey": GERENCIA_SUPABASE_ANON_KEY,
+            "Authorization": `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+          }
+        }).catch(() => {
+        })
+      ]);
     } catch (err) {
       console.warn("Failed to delete from Gerencia:", err);
     }
   }
   app2.post("/api/degustaciones/sync-gerencia", async (req, res) => {
     try {
-      console.log("[SYNC TRADE] Sincronizando degustaciones de forma exacta y perfecta con Trade Marketing...");
-      let list = [];
-      if (supabase) {
-        const { data, error } = await supabase.from("degustaciones").select("*").order("fecha", { ascending: false });
-        if (!error && Array.isArray(data) && data.length > 0) {
-          list = data;
-        }
+      console.log("[SYNC TRADE] Sincronizando todas las degustaciones en orden cronol\xF3gico con Trade Marketing (codizulca-dashboard-4)...");
+      const mergedDesc = await loadAllMergedDegustaciones();
+      if (supabase && mergedDesc.length > 0) {
+        const supaRows = mergedDesc.map((record) => ({
+          id: record.id,
+          cliente_codigo: record.clienteCodigo || "PDV",
+          cliente_nombre: record.clienteNombre,
+          vendedor_nombre: record.vendedorNombre || "Vendedor",
+          vendedor_id: record.vendedorId || "1",
+          vendedor_email: record.vendedorEmail || null,
+          ruta: record.ruta || "",
+          fecha: record.fecha,
+          turno: record.turno || "MA\xD1ANA",
+          hora: record.hora || "",
+          productos: Array.isArray(record.productos) ? record.productos : [],
+          kilos_estimados: Number(record.kilosEstimados) || 0,
+          personas_estimadas: Number(record.personasEstimadas) || 150,
+          requiere_promotora: Boolean(record.requierePromotora),
+          promotora_asignada: record.promotoraAsignada || "",
+          material_pop: Boolean(record.materialPop),
+          contacto_punto: record.contactoPunto || "",
+          telefono_contacto: record.telefonoContacto || "",
+          observaciones: record.observaciones || "",
+          estado: record.estado || "SOLICITADA",
+          notas_trade_marketing: record.notasTradeMarketing || "",
+          resultado: record.resultado || null,
+          created_at: record.createdAt
+        }));
+        await supabase.from("degustaciones").upsert(supaRows);
       }
-      if (list.length === 0) {
-        try {
-          const snap = await (0, import_firestore2.getDocs)((0, import_firestore2.collection)(db, "degustaciones"));
-          snap.forEach((d) => {
-            const data = d.data();
-            if (data && data.clienteNombre) list.push({ id: d.id, ...data });
-          });
-        } catch (_) {
+      const remoteById = /* @__PURE__ */ new Map();
+      try {
+        const remRes = await fetch(GERENCIA_TRADE_API_URL);
+        if (remRes.ok) {
+          const remJson = await remRes.json();
+          if (Array.isArray(remJson)) {
+            remJson.forEach((r) => {
+              if (r && r.id) remoteById.set(String(r.id), r);
+            });
+          }
         }
+      } catch (_) {
       }
-      syncToTradeMarketingJson(list);
+      syncToTradeMarketingJson(mergedDesc);
+      const orderedAsc = sortDegustacionesServer(mergedDesc, true);
       let countSynced = 0;
-      for (const item of list) {
-        await syncToGerenciaDirect(item);
+      for (const item of orderedAsc) {
+        const degId = `DEG-${item.id}`;
+        await syncToGerenciaDirect(item, remoteById.get(degId));
         countSynced++;
       }
       res.json({
         success: true,
-        message: "Degustaciones sincronizadas de forma exacta y perfecta con Trade Marketing",
-        total: list.length,
+        message: "Degustaciones sincronizadas y ordenadas correctamente en Trade Marketing",
+        total: mergedDesc.length,
         synced: countSynced,
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       });

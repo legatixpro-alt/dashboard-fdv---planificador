@@ -146,10 +146,10 @@ export function subscribeDegustaciones(
             });
           });
 
-          // Ordenar por fecha descendente
-          list.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
-          setLocalCache(list);
-          callback(list);
+          // Ordenar de forma determinística: fecha descendente, luego turno (MAÑANA antes de TARDE), luego vendedor y cliente
+          const sortedList = sortDegustacionesOrdenadas(list, false);
+          setLocalCache(sortedList);
+          callback(sortedList);
         } else {
           setLocalCache([]);
           callback([]);
@@ -158,7 +158,7 @@ export function subscribeDegustaciones(
       (error) => {
         handleFirestoreError(error, OperationType.GET, DEGUSTACIONES_COLLECTION);
         // Continuar con caché local ante error
-        callback(getLocalCache());
+        callback(sortDegustacionesOrdenadas(getLocalCache(), false));
       }
     );
 
@@ -167,6 +167,61 @@ export function subscribeDegustaciones(
     console.warn("Firestore subscription failed, relying on local cache:", err);
     return () => {};
   }
+}
+
+/**
+ * Ordenamiento cronológico determinístico para degustaciones:
+ * - Si ascending === false (por defecto): Fecha más reciente primero (YYYY-MM-DD desc), luego MAÑANA antes de TARDE, luego hora, vendedor y cliente.
+ * - Si ascending === true: Fecha más antigua primero (ideal para inserción secuencial en pilas LIFO como el API de Render).
+ */
+export function sortDegustacionesOrdenadas(list: Degustacion[], ascending: boolean = false): Degustacion[] {
+  const shiftRank = (turno?: string, hora?: string): number => {
+    const t = String(turno || '').toUpperCase().trim();
+    const h = String(hora || '').toUpperCase().trim();
+    if (t === 'MAÑANA' || t === 'MANANA' || h.includes('09:') || h.includes('9:') || h.includes('AM')) return 1;
+    if (t === 'TARDE' || h.includes('02:') || h.includes('14:') || h.includes('04:') || h.includes('PM')) return 2;
+    return 3;
+  };
+
+  const toIsoDate = (raw?: string): string => {
+    const s = String(raw || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+      const [d, m, y] = s.split('/');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    return s;
+  };
+
+  return [...list].sort((a, b) => {
+    const dateA = toIsoDate(a.fecha);
+    const dateB = toIsoDate(b.fecha);
+    if (dateA !== dateB) {
+      return ascending ? dateA.localeCompare(dateB) : dateB.localeCompare(dateA);
+    }
+
+    const rankA = shiftRank(a.turno, a.hora);
+    const rankB = shiftRank(b.turno, b.hora);
+    if (rankA !== rankB) {
+      return ascending ? rankB - rankA : rankA - rankB;
+    }
+
+    const vendA = String(a.vendedorNombre || '').toUpperCase().trim();
+    const vendB = String(b.vendedorNombre || '').toUpperCase().trim();
+    if (vendA !== vendB) {
+      return ascending ? vendB.localeCompare(vendA, 'es') : vendA.localeCompare(vendB, 'es');
+    }
+
+    const cliA = String(a.clienteNombre || '').toUpperCase().trim();
+    const cliB = String(b.clienteNombre || '').toUpperCase().trim();
+    if (cliA !== cliB) {
+      return ascending ? cliB.localeCompare(cliA, 'es') : cliA.localeCompare(cliB, 'es');
+    }
+
+    return ascending
+      ? String(b.id || '').localeCompare(String(a.id || ''))
+      : String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
 export const DEFAULT_GOOGLE_SHEETS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx6JMUR1IubQuZ97Ics7emw_I0G9UAy-5vig4Vl8zPwW8yMBbZldvQGeGOPNiNbUmVTaQ/exec';
@@ -231,8 +286,77 @@ export async function syncToGoogleSheets(degustacion: Degustacion): Promise<bool
   }
 }
 
+export const GERENCIA_TRADE_API_URL = (import.meta as any).env?.VITE_GERENCIA_TRADE_API_URL || 'https://codizulca-dashboard-4.onrender.com/api/degustaciones';
+export const GERENCIA_UTERIO_SURVEYS_URL = 'https://uterioexpfweghxfbvoa.supabase.co/rest/v1/surveys';
+export const GERENCIA_UTERIO_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZXJpb2V4cGZ3ZWdoeGZidm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NTg3ODYsImV4cCI6MjEwMzUzNDc4Nn0.bZnN4vrXUDlcoIaI7l39O-bU4GQp05SvJdio_cn6niI';
 export const GERENCIA_SUPABASE_SURVEYS_URL = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_SURVEYS_URL || 'https://nudltbgyewyiklqdyujk.supabase.co/rest/v1/surveys';
 export const GERENCIA_SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_GERENCIA_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51ZGx0Ymd5ZXd5aWtscWR5dWprIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTgzMDA3OCwiZXhwIjoyMTA3NDA2MDc4fQ.k92vdZiuVkTzAWNK8Fq71m1Xi_MoWtpx_eRQcZTw1cA';
+
+/**
+ * Construye el objeto exacto DegustacionItem esperado por https://codizulca-dashboard-4.onrender.com/dashboard/trade
+ */
+export function buildTradeMarketingItem(degustacion: Degustacion) {
+  const cleanId = String(degustacion.id || '').replace(/^DEG-/, '');
+  const recordId = `DEG-${cleanId}`;
+
+  let dmyDate = String(degustacion.fecha || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dmyDate)) {
+    const [y, m, d] = dmyDate.split('-');
+    dmyDate = `${d}/${m}/${y}`;
+  }
+
+  const timeStr = (degustacion.hora && degustacion.hora.trim())
+    ? degustacion.hora.trim()
+    : (degustacion.turno === 'TARDE' ? '02:00 PM - 07:00 PM' : '09:00 AM - 01:00 PM');
+
+  const productListStr = Array.isArray(degustacion.productos) && degustacion.productos.length > 0
+    ? degustacion.productos.join(', ')
+    : (typeof degustacion.productos === 'string' && degustacion.productos ? degustacion.productos : 'MORTADELA');
+
+  const vendedorName = String(degustacion.vendedorNombre || 'VENDEDOR COMERCIAL').trim();
+  const clientName = String(degustacion.clienteNombre || 'Punto de Venta').trim();
+  const zoneName = String(degustacion.ruta || degustacion.vendedorId || vendedorName || 'Ruta Comercial').trim();
+  const kilosNum = Number(degustacion.kilosEstimados) || 5;
+  const targetNum = Number(degustacion.personasEstimadas) || 150;
+
+  const normEstado = String(degustacion.estado || 'SOLICITADA').toUpperCase().trim();
+  let status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled' = 'scheduled';
+  if (normEstado === 'REALIZADA' || normEstado === 'COMPLETED') status = 'completed';
+  else if (normEstado === 'RECHAZADA' || normEstado === 'CANCELADA' || normEstado === 'CANCELLED') status = 'cancelled';
+
+  const rawPromoter = String(degustacion.promotoraAsignada || '').trim();
+  const promoter = (rawPromoter && !rawPromoter.toUpperCase().includes('POR ASIGNAR'))
+    ? rawPromoter
+    : 'POR ASIGNAR (Trade Marketing)';
+
+  const contactPrefix = degustacion.contactoPunto
+    ? `Contacto en tienda: ${degustacion.contactoPunto.trim()}${degustacion.telefonoContacto ? ` (${degustacion.telefonoContacto.trim()})` : ''}. `
+    : '';
+  const obsClean = String(degustacion.observaciones || '').trim();
+  const bodyNote = obsClean
+    ? obsClean
+    : `Agendada por ${vendedorName}. Kilos: ${kilosNum}. Personas: ${targetNum}.`;
+  const fullComments = `${contactPrefix}${bodyNote}`.trim();
+
+  return {
+    id: recordId,
+    date: dmyDate,
+    time: timeStr,
+    activity: `Degustación ${productListStr} - Solicitada por ${vendedorName}`,
+    product: productListStr,
+    promoter,
+    promoterRole: 'Impulsadora' as const,
+    client: clientName,
+    zone: zoneName,
+    vendedor: vendedorName,
+    source: 'vendedor_app' as const,
+    status,
+    delivered: Number(degustacion.resultado?. personasAlcanzadas) || (status === 'completed' ? targetNum : 0),
+    target: targetNum,
+    acceptanceRate: status === 'completed' ? 95 : 0,
+    comments: fullComments
+  };
+}
 
 export function buildGerenciaSurveyPayload(degustacion: Degustacion) {
   const normEstado = (degustacion.estado || 'SOLICITADA').toUpperCase();
@@ -250,8 +374,14 @@ export function buildGerenciaSurveyPayload(degustacion: Degustacion) {
     ? degustacion.productos.join(', ')
     : (degustacion.productos || 'Productos');
 
+  const rawPromoter = String(degustacion.promotoraAsignada || '').trim();
+  const promoterAssigned = (rawPromoter && !rawPromoter.toUpperCase().includes('POR ASIGNAR'))
+    ? rawPromoter
+    : '';
+
   const commentsObj = {
     isTasting: true,
+    source: 'vendedor_app',
     degustacionId: degustacion.id,
     id: degustacion.id,
     client: degustacion.clienteNombre,
@@ -260,8 +390,8 @@ export function buildGerenciaSurveyPayload(degustacion: Degustacion) {
     store: degustacion.clienteNombre,
     vendedor: degustacion.vendedorNombre,
     salesRep: degustacion.vendedorNombre,
-    promoter: degustacion.promotoraAsignada || degustacion.vendedorNombre || 'Vendedor',
-    promotoraAsignada: degustacion.promotoraAsignada || '',
+    promoter: promoterAssigned || 'POR ASIGNAR (Trade Marketing)',
+    promotoraAsignada: promoterAssigned,
     ruta: degustacion.ruta || degustacion.vendedorId || '',
     date: degustacion.fecha || new Date().toISOString().split('T')[0],
     turno: degustacion.turno || 'MAÑANA',
@@ -291,36 +421,33 @@ export function buildGerenciaSurveyPayload(degustacion: Degustacion) {
     type: 'Degustacion',
     date: degustacion.fecha || new Date().toISOString().split('T')[0],
     store: degustacion.clienteNombre,
-    promoter: degustacion.promotoraAsignada || degustacion.vendedorNombre || 'Vendedor',
+    promoter: promoterAssigned || degustacion.vendedorNombre || 'Vendedor',
     product: productListStr,
     comments: JSON.stringify(commentsObj)
   };
 }
 
-export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise<boolean> {
+async function upsertSurveyToSupabaseEndpoint(url: string, apiKey: string, degustacionId: string, payload: any): Promise<boolean> {
   try {
-    const payload = buildGerenciaSurveyPayload(degustacion);
-
-    // 1. Comprobar si ya existe una encuesta registrada con este degustacionId
-    const searchUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${degustacion.id}*&select=id&limit=1`;
+    const cleanId = String(degustacionId).replace(/^DEG-/, '');
+    const searchUrl = `${url}?comments=like.*${encodeURIComponent(cleanId)}*&select=id&limit=5`;
     const searchRes = await fetch(searchUrl, {
       method: 'GET',
       headers: {
-        'apikey': GERENCIA_SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`
       }
     });
 
     if (searchRes.ok) {
       const records = await searchRes.json();
       if (Array.isArray(records) && records.length > 0 && records[0].id) {
-        // Actualizar registro existente mediante PATCH para no duplicar datos
-        const updateUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?id=eq.${records[0].id}`;
+        const updateUrl = `${url}?id=eq.${records[0].id}`;
         const patchRes = await fetch(updateUrl, {
           method: 'PATCH',
           headers: {
-            'apikey': GERENCIA_SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+            'apikey': apiKey,
+            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             'Prefer': 'return=representation'
           },
@@ -330,12 +457,11 @@ export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise
       }
     }
 
-    // 2. Si no existe, insertar un nuevo registro con POST
-    const res = await fetch(GERENCIA_SUPABASE_SURVEYS_URL, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
-        'apikey': GERENCIA_SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`,
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Prefer': 'return=representation'
       },
@@ -343,6 +469,32 @@ export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise
     });
 
     return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise<boolean> {
+  try {
+    const tradeItem = buildTradeMarketingItem(degustacion);
+    const surveyPayload = buildGerenciaSurveyPayload(degustacion);
+
+    const [renderOk, uterioOk, nudltOk] = await Promise.all([
+      // 1. Enviar en tiempo real al API directo de Trade Marketing en Render (https://codizulca-dashboard-4.onrender.com/api/degustaciones)
+      fetch(GERENCIA_TRADE_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tradeItem)
+      }).then(r => r.ok).catch(() => false),
+
+      // 2. Sincronizar en Supabase de Gerencia (uterioexpfweghxfbvoa)
+      upsertSurveyToSupabaseEndpoint(GERENCIA_UTERIO_SURVEYS_URL, GERENCIA_UTERIO_ANON_KEY, degustacion.id, surveyPayload),
+
+      // 3. Sincronizar en Supabase del Planificador (nudltbgyewyiklqdyujk)
+      upsertSurveyToSupabaseEndpoint(GERENCIA_SUPABASE_SURVEYS_URL, GERENCIA_SUPABASE_ANON_KEY, degustacion.id, surveyPayload)
+    ]);
+
+    return renderOk || uterioOk || nudltOk;
   } catch (err) {
     console.warn("Error sincronizando con el Dashboard de Gerencia:", err);
     return false;
@@ -351,15 +503,28 @@ export async function syncToGerenciaDashboard(degustacion: Degustacion): Promise
 
 export async function deleteFromGerenciaDashboard(id: string): Promise<boolean> {
   try {
-    const deleteUrl = `${GERENCIA_SUPABASE_SURVEYS_URL}?type=eq.Degustacion&comments=like.*${id}*`;
-    const res = await fetch(deleteUrl, {
-      method: 'DELETE',
-      headers: {
-        'apikey': GERENCIA_SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
-      }
-    });
-    return res.ok;
+    const cleanId = String(id).replace(/^DEG-/, '');
+    const degId = `DEG-${cleanId}`;
+
+    const [renderDel, uterioDel, nudltDel] = await Promise.all([
+      fetch(`${GERENCIA_TRADE_API_URL}/${encodeURIComponent(degId)}`, { method: 'DELETE' }).then(r => r.ok).catch(() => false),
+      fetch(`${GERENCIA_UTERIO_SURVEYS_URL}?comments=like.*${encodeURIComponent(cleanId)}*`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': GERENCIA_UTERIO_ANON_KEY,
+          'Authorization': `Bearer ${GERENCIA_UTERIO_ANON_KEY}`
+        }
+      }).then(r => r.ok).catch(() => false),
+      fetch(`${GERENCIA_SUPABASE_SURVEYS_URL}?comments=like.*${encodeURIComponent(cleanId)}*`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': GERENCIA_SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${GERENCIA_SUPABASE_ANON_KEY}`
+        }
+      }).then(r => r.ok).catch(() => false)
+    ]);
+
+    return renderDel || uterioDel || nudltDel;
   } catch (err) {
     console.warn("Error eliminando del Dashboard de Gerencia:", err);
     return false;
@@ -368,12 +533,14 @@ export async function deleteFromGerenciaDashboard(id: string): Promise<boolean> 
 
 /**
  * Sincroniza en lote todas las degustaciones con el Dashboard de Gerencia y Módulo de Trade Marketing
+ * enviándolas en orden ascendente a Render para que queden ordenadas de más reciente a más antigua.
  */
 export async function syncAllDegustacionesToGerencia(degustaciones: Degustacion[]): Promise<{ success: number; failed: number }> {
   try {
     const res = await fetch('/api/degustaciones/sync-gerencia', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ degustaciones })
     });
     if (res.ok) {
       const data = await res.json();
@@ -385,7 +552,10 @@ export async function syncAllDegustacionesToGerencia(degustaciones: Degustacion[
 
   let success = 0;
   let failed = 0;
-  const validDegs = degustaciones.filter(d => d && d.id && !TEST_IDS_TO_EXCLUDE.includes(d.id));
+  const validDegs = sortDegustacionesOrdenadas(
+    degustaciones.filter(d => d && d.id && !TEST_IDS_TO_EXCLUDE.includes(d.id)),
+    true // Ascendente para que el POST en Render deje la más reciente arriba
+  );
   for (const d of validDegs) {
     const ok = await syncToGerenciaDashboard(d);
     if (ok) success++;
@@ -398,7 +568,7 @@ export async function syncAllDegustacionesToGerencia(degustaciones: Degustacion[
  * Guarda o crea una degustación en Firestore y en caché local
  */
 export async function saveDegustacion(degustacion: Degustacion): Promise<void> {
-  // Actualizar inmediatamente en cache local
+  // Actualizar inmediatamente en cache local ordenado
   const current = getLocalCache();
   const index = current.findIndex(d => d.id === degustacion.id);
   let updatedList: Degustacion[];
@@ -408,7 +578,7 @@ export async function saveDegustacion(degustacion: Degustacion): Promise<void> {
   } else {
     updatedList = [degustacion, ...current];
   }
-  setLocalCache(updatedList);
+  setLocalCache(sortDegustacionesOrdenadas(updatedList, false));
 
   // Guardar en Firestore
   try {
@@ -418,10 +588,17 @@ export async function saveDegustacion(degustacion: Degustacion): Promise<void> {
     handleFirestoreError(error, OperationType.WRITE, `${DEGUSTACIONES_COLLECTION}/${degustacion.id}`);
   }
 
+  // Sincronizar con el backend del Planificador (/api/degustaciones)
+  fetch('/api/degustaciones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(degustacion)
+  }).catch(() => {});
+
   // Sincronizar automáticamente con Google Sheets
   syncToGoogleSheets(degustacion).catch(() => {});
 
-  // Sincronizar directamente con el Dashboard de Gerencia (https://dashboardgerencia01.ai.studio)
+  // Sincronizar directamente con el Dashboard de Gerencia (https://codizulca-dashboard-4.onrender.com/dashboard/trade)
   syncToGerenciaDashboard(degustacion).catch(() => {});
 }
 
@@ -438,7 +615,7 @@ export async function updateDegustacion(
   if (index >= 0) {
     updatedItem = { ...current[index], ...updates, updatedAt: new Date().toISOString() };
     current[index] = updatedItem;
-    setLocalCache([...current]);
+    setLocalCache(sortDegustacionesOrdenadas([...current], false));
   }
 
   try {
@@ -450,6 +627,12 @@ export async function updateDegustacion(
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${DEGUSTACIONES_COLLECTION}/${id}`);
   }
+
+  fetch(`/api/degustaciones/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates)
+  }).catch(() => {});
 
   if (updatedItem) {
     syncToGoogleSheets(updatedItem).catch(() => {});
@@ -469,6 +652,10 @@ export async function deleteDegustacion(id: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${DEGUSTACIONES_COLLECTION}/${id}`);
   }
+
+  fetch(`/api/degustaciones/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  }).catch(() => {});
 
   deleteFromGerenciaDashboard(id).catch(() => {});
 }

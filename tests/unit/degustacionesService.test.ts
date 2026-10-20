@@ -5,6 +5,8 @@ import {
   countVendorDegustacionesInWeek,
   checkDateAvailability,
   buildGerenciaSurveyPayload,
+  buildTradeMarketingItem,
+  sortDegustacionesOrdenadas,
   syncToGoogleSheets,
   syncToGerenciaDashboard,
   DEFAULT_CONFIG,
@@ -377,6 +379,63 @@ describe('Unit: degustacionesService', () => {
       expect(parsedComments.kilos).toBe(10);
       expect(parsedComments.personas).toBe(40);
       expect(parsedComments.materialPop).toBe('SI');
+    });
+
+    it('should build exact DegustacionItem for Trade Marketing and sort deterministically', () => {
+      const d1: Degustacion = {
+        id: 'deg-mvfpo9po-psqi',
+        clienteCodigo: '941',
+        clienteNombre: 'CREA DESARROLLOS, S.A.',
+        vendedorNombre: 'SAIRÚ VALLES',
+        vendedorId: 'CUENTAS CLAVE 2',
+        ruta: 'CUENTAS CLAVE 2',
+        fecha: '2026-10-23',
+        turno: 'MAÑANA',
+        hora: '09:00 AM - 01:00 PM',
+        productos: ['MORTADELA'],
+        kilosEstimados: 5,
+        personasEstimadas: 150,
+        requierePromotora: true,
+        promotoraAsignada: '',
+        materialPop: true,
+        contactoPunto: 'Endrina',
+        telefonoContacto: '04246306317',
+        observaciones: '',
+        estado: 'SOLICITADA',
+        createdAt: '2026-10-20T12:00:00Z'
+      };
+      const d2: Degustacion = {
+        ...d1,
+        id: 'deg-mvfpl9hk-0zi3',
+        clienteNombre: 'OPERADORA DEL SUR,C.A',
+        turno: 'TARDE',
+        hora: '02:00 PM - 07:00 PM',
+        productos: ['ARROZ CON LECHE']
+      };
+      const d3: Degustacion = {
+        ...d1,
+        id: 'deg-mvfprsas-1vzr',
+        fecha: '2026-10-22',
+        clienteNombre: 'FAMILIA CENTER, C.A'
+      };
+
+      const item = buildTradeMarketingItem(d1);
+      expect(item.id).toBe('DEG-deg-mvfpo9po-psqi');
+      expect(item.date).toBe('23/10/2026');
+      expect(item.time).toBe('09:00 AM - 01:00 PM');
+      expect(item.vendedor).toBe('SAIRÚ VALLES');
+      expect(item.client).toBe('CREA DESARROLLOS, S.A.');
+      expect(item.product).toBe('MORTADELA');
+      expect(item.promoter).toBe('POR ASIGNAR (Trade Marketing)');
+      expect(item.status).toBe('scheduled');
+      expect(item.comments).toContain('Contacto en tienda: Endrina (04246306317)');
+
+      const sortedDesc = sortDegustacionesOrdenadas([d3, d2, d1], false);
+      expect(sortedDesc.map(d => d.id)).toEqual([
+        'deg-mvfpo9po-psqi', // 2026-10-23 MAÑANA
+        'deg-mvfpl9hk-0zi3', // 2026-10-23 TARDE
+        'deg-mvfprsas-1vzr'  // 2026-10-22 MAÑANA
+      ]);
     });
   });
 
