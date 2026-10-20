@@ -13,6 +13,19 @@ export interface VendorProfile {
   routes: AssignedRoute[];
 }
 
+export interface SupervisorProfile {
+  canonicalUsername: string;
+  displayName: string;
+  supervisedVendors: string[];
+}
+
+// Columnas de resumen de supervisores en "Volumen por SKU" (no son rutas de vendedor individual)
+export const SUPERVISOR_SUMMARY_COLUMNS = new Set([
+  'ALI PEREZ',
+  'NELSON FINOL',
+  'JOHNATAN SOTO'
+]);
+
 // Normalizador de texto para comparaciones robustas contra nombres en hojas de cálculo
 export function normalizeVendorName(val: string | null | undefined): string {
   if (!val) return '';
@@ -140,6 +153,20 @@ export const VENDOR_PROFILES: Record<string, VendorProfile> = {
       { id: 'JOSE G. GONZALEZ', label: 'Ruta José G. González', aliases: ['JOSE G. GONZALEZ', 'JOSE GONZALEZ'] }
     ]
   },
+  'FOOD SERVICE SUR': {
+    canonicalUsername: 'FOOD SERVICE SUR',
+    displayName: 'Food Service Sur',
+    routes: [
+      { id: 'FOOD SERVICE SUR', label: 'Ruta Food Service Sur', aliases: ['FOOD SERVICE SUR'] }
+    ]
+  },
+  'JAIDER MEDINA - FOOD SERVICE NORTE': {
+    canonicalUsername: 'JAIDER MEDINA - FOOD SERVICE NORTE',
+    displayName: 'Jaider Medina (Food Service Norte)',
+    routes: [
+      { id: 'JAIDER MEDINA - FOOD SERVICE NORTE', label: 'Ruta Food Service Norte', aliases: ['JAIDER MEDINA - FOOD SERVICE NORTE', 'JAIDER MEDINA', 'FOOD SERVICE NORTE'] }
+    ]
+  },
   'ANGELICA MORENO': {
     canonicalUsername: 'ANGELICA MORENO',
     displayName: 'Angélica Moreno',
@@ -184,11 +211,25 @@ export const VENDOR_PROFILES: Record<string, VendorProfile> = {
       { id: 'ELISA SOLER', label: 'Ruta Elisa Soler', aliases: ['ELISA SOLER'] }
     ]
   },
-  'ALI PEREZ': {
-    canonicalUsername: 'ALI PEREZ',
-    displayName: 'Alí Pérez',
+  'ANGEL NAVARRO': {
+    canonicalUsername: 'ANGEL NAVARRO',
+    displayName: 'Ángel Navarro',
     routes: [
-      { id: 'ALI PEREZ', label: 'Ruta Alí Pérez', aliases: ['ALI PEREZ'] }
+      { id: 'ANGEL NAVARRO', label: 'Ruta Ángel Navarro', aliases: ['ANGEL NAVARRO', 'ÁNGEL NAVARRO'] }
+    ]
+  },
+  'MARIANGEL GONZALEZ': {
+    canonicalUsername: 'MARIANGEL GONZALEZ',
+    displayName: 'Mariangel González',
+    routes: [
+      { id: 'MARIANGEL GONZALEZ', label: 'Ruta Mariangel González', aliases: ['MARIANGEL GONZALEZ', 'MARIANGEL GONZÁLEZ'] }
+    ]
+  },
+  'VICTOR CAMPOS': {
+    canonicalUsername: 'VICTOR CAMPOS',
+    displayName: 'Víctor Campos',
+    routes: [
+      { id: 'VICTOR CAMPOS', label: 'Ruta Víctor Campos', aliases: ['VICTOR CAMPOS', 'VÍCTOR CAMPOS'] }
     ]
   },
   'EDUARDO PIÑA': {
@@ -249,6 +290,66 @@ VENDOR_PROFILES['JOHNATAN SOTO VILLA DEL ROS'] = mikelProfile;
 VENDOR_PROFILES['JOHNATAN'] = mikelProfile;
 VENDOR_PROFILES['JONATHAN'] = mikelProfile;
 VENDOR_PROFILES['JHONATAN'] = mikelProfile;
+VENDOR_PROFILES['JAIDER MEDINA'] = VENDOR_PROFILES['JAIDER MEDINA - FOOD SERVICE NORTE'];
+
+// Perfiles de Supervisores (Alí Pérez ya NO es vendedor, sino únicamente Supervisor)
+export const SUPERVISOR_PROFILES: Record<string, SupervisorProfile> = {
+  'ALI PEREZ': {
+    canonicalUsername: 'ALI PEREZ',
+    displayName: 'Alí Pérez (Supervisor)',
+    supervisedVendors: [
+      'ANGEL NAVARRO',
+      'MARIANGEL GONZALEZ',
+      'VICTOR CAMPOS',
+      'ELISA SOLER',
+      'LEONARDO RIOS',
+      'LUIS GUANIPA',
+      'OSCAR ORTIZ'
+    ]
+  }
+};
+
+export function getSupervisorProfile(username: string | null | undefined): SupervisorProfile | null {
+  const norm = normalizeVendorName(username).replace(/^SUPERVISOR:/, '').trim();
+  if (!norm) return null;
+  if (SUPERVISOR_PROFILES[norm]) return SUPERVISOR_PROFILES[norm];
+  const clean = norm.replace(/[^A-Z0-9]/g, '');
+  for (const [k, sup] of Object.entries(SUPERVISOR_PROFILES)) {
+    if (k.replace(/[^A-Z0-9]/g, '') === clean) return sup;
+  }
+  return null;
+}
+
+export function getSupervisedRoutes(supervisorUsername: string): AssignedRoute[] {
+  const sup = getSupervisorProfile(supervisorUsername);
+  if (!sup) return [];
+  const routes: AssignedRoute[] = [];
+  const seen = new Set<string>();
+  sup.supervisedVendors.forEach((vKey) => {
+    const prof = VENDOR_PROFILES[vKey];
+    if (prof) {
+      prof.routes.forEach((r) => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          routes.push(r);
+        }
+      });
+    }
+  });
+  return routes;
+}
+
+export function getSupervisedAliases(supervisorUsername: string): string[] {
+  const sup = getSupervisorProfile(supervisorUsername);
+  if (!sup) return [];
+  const routes = getSupervisedRoutes(supervisorUsername);
+  return Array.from(
+    new Set([
+      ...sup.supervisedVendors,
+      ...routes.flatMap((r) => [r.id, ...r.aliases])
+    ])
+  );
+}
 
 /**
  * Compara de forma exacta y precisa si el nombre del vendedor en la hoja de cálculo
@@ -302,11 +403,11 @@ export function getVendorProfile(username: string): VendorProfile {
 /**
  * Obtiene las rutas asignadas que el usuario tiene permitido ver.
  * Si es ADMIN, puede auditar todas las rutas de la empresa.
+ * Si es SUPERVISOR, ve las rutas de su equipo supervisado.
  * Si es VENDEDOR, ÚNICAMENTE ve las rutas que le pertenecen.
  */
 export function getAllowedRoutesForUser(username: string, role: Role): AssignedRoute[] {
   if (role === 'ADMIN') {
-    // Admin puede ver todas las rutas registradas
     const map = new Map<string, AssignedRoute>();
     Object.values(VENDOR_PROFILES).forEach(profile => {
       profile.routes.forEach(r => {
@@ -316,6 +417,10 @@ export function getAllowedRoutesForUser(username: string, role: Role): AssignedR
       });
     });
     return Array.from(map.values());
+  }
+
+  if (role === 'SUPERVISOR') {
+    return getSupervisedRoutes(username);
   }
 
   // Para vendedor: ESTRICTAMENTE SUS PROPIAS RUTAS ASIGNADAS
@@ -335,6 +440,24 @@ export function isRouteMatch(
 ): boolean {
   const normSheetVendor = normalizeVendorName(sheetVendor);
   if (!normSheetVendor) return false;
+  // Nunca incluir la fila resumen de "ALI PEREZ" como si fuera un vendedor
+  if (normSheetVendor === 'ALI PEREZ') return false;
+
+  // Filtro por equipo de supervisor (ej. SUPERVISOR:ALI PEREZ)
+  if (selectedRouteId.startsWith('SUPERVISOR:')) {
+    const supName = selectedRouteId.slice('SUPERVISOR:'.length);
+    const supAliases = getSupervisedAliases(supName);
+    if (userRole === 'ADMIN') {
+      return matchesVendorAlias(supAliases, normSheetVendor);
+    }
+    if (userRole === 'SUPERVISOR') {
+      const mySup = getSupervisorProfile(loggedInVendor);
+      if (mySup && matchesVendorAlias([mySup.canonicalUsername], supName)) {
+        return matchesVendorAlias(supAliases, normSheetVendor);
+      }
+      return false;
+    }
+  }
 
   // 1. Acceso de Administrador
   if (userRole === 'ADMIN') {
@@ -363,7 +486,30 @@ export function isRouteMatch(
     return matchesVendorAlias([selectedRouteId], normSheetVendor);
   }
 
-  // 2. Acceso de VENDEDOR (Personal y Restringido)
+  // 2. Acceso de SUPERVISOR (Equipo supervisado)
+  if (userRole === 'SUPERVISOR') {
+    const mySupAliases = getSupervisedAliases(loggedInVendor);
+    const mySupRoutes = getSupervisedRoutes(loggedInVendor);
+    if (selectedRouteId === 'SUPERVISOR_ALL' || selectedRouteId === 'ALL_MY_ROUTES') {
+      return matchesVendorAlias(mySupAliases, normSheetVendor);
+    }
+    if (selectedRouteId.startsWith('CONSOLIDATED:')) {
+      const rawTarget = selectedRouteId.replace(/^CONSOLIDATED:/, '');
+      const sup = getSupervisorProfile(loggedInVendor);
+      if (sup && sup.supervisedVendors.some(v => matchesVendorAlias([v], rawTarget))) {
+        const prof = getVendorProfile(rawTarget);
+        return matchesVendorAlias(prof.routes.flatMap(r => r.aliases), normSheetVendor);
+      }
+      return false;
+    }
+    const targetRoute = mySupRoutes.find(r => r.id === selectedRouteId || matchesVendorAlias([r.id, ...r.aliases], selectedRouteId));
+    if (targetRoute) {
+      return matchesVendorAlias(targetRoute.aliases, normSheetVendor);
+    }
+    return false;
+  }
+
+  // 3. Acceso de VENDEDOR (Personal y Restringido)
   const profile = getVendorProfile(loggedInVendor);
   const myAssignedRoutes = profile.routes;
 

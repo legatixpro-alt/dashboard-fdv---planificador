@@ -67,6 +67,11 @@ var db = (0, import_firestore.getFirestore)(app, firebase_applet_config_default.
 var auth = (0, import_auth.getAuth)(app);
 
 // src/utils/vendorRoutes.ts
+var SUPERVISOR_SUMMARY_COLUMNS = /* @__PURE__ */ new Set([
+  "ALI PEREZ",
+  "NELSON FINOL",
+  "JOHNATAN SOTO"
+]);
 function normalizeVendorName(val) {
   if (!val) return "";
   return String(val).replace(/\s+/g, " ").replace(/\s*-\s*/g, " - ").trim().toUpperCase();
@@ -187,6 +192,20 @@ var VENDOR_PROFILES = {
       { id: "JOSE G. GONZALEZ", label: "Ruta Jos\xE9 G. Gonz\xE1lez", aliases: ["JOSE G. GONZALEZ", "JOSE GONZALEZ"] }
     ]
   },
+  "FOOD SERVICE SUR": {
+    canonicalUsername: "FOOD SERVICE SUR",
+    displayName: "Food Service Sur",
+    routes: [
+      { id: "FOOD SERVICE SUR", label: "Ruta Food Service Sur", aliases: ["FOOD SERVICE SUR"] }
+    ]
+  },
+  "JAIDER MEDINA - FOOD SERVICE NORTE": {
+    canonicalUsername: "JAIDER MEDINA - FOOD SERVICE NORTE",
+    displayName: "Jaider Medina (Food Service Norte)",
+    routes: [
+      { id: "JAIDER MEDINA - FOOD SERVICE NORTE", label: "Ruta Food Service Norte", aliases: ["JAIDER MEDINA - FOOD SERVICE NORTE", "JAIDER MEDINA", "FOOD SERVICE NORTE"] }
+    ]
+  },
   "ANGELICA MORENO": {
     canonicalUsername: "ANGELICA MORENO",
     displayName: "Ang\xE9lica Moreno",
@@ -231,11 +250,25 @@ var VENDOR_PROFILES = {
       { id: "ELISA SOLER", label: "Ruta Elisa Soler", aliases: ["ELISA SOLER"] }
     ]
   },
-  "ALI PEREZ": {
-    canonicalUsername: "ALI PEREZ",
-    displayName: "Al\xED P\xE9rez",
+  "ANGEL NAVARRO": {
+    canonicalUsername: "ANGEL NAVARRO",
+    displayName: "\xC1ngel Navarro",
     routes: [
-      { id: "ALI PEREZ", label: "Ruta Al\xED P\xE9rez", aliases: ["ALI PEREZ"] }
+      { id: "ANGEL NAVARRO", label: "Ruta \xC1ngel Navarro", aliases: ["ANGEL NAVARRO", "\xC1NGEL NAVARRO"] }
+    ]
+  },
+  "MARIANGEL GONZALEZ": {
+    canonicalUsername: "MARIANGEL GONZALEZ",
+    displayName: "Mariangel Gonz\xE1lez",
+    routes: [
+      { id: "MARIANGEL GONZALEZ", label: "Ruta Mariangel Gonz\xE1lez", aliases: ["MARIANGEL GONZALEZ", "MARIANGEL GONZ\xC1LEZ"] }
+    ]
+  },
+  "VICTOR CAMPOS": {
+    canonicalUsername: "VICTOR CAMPOS",
+    displayName: "V\xEDctor Campos",
+    routes: [
+      { id: "VICTOR CAMPOS", label: "Ruta V\xEDctor Campos", aliases: ["VICTOR CAMPOS", "V\xCDCTOR CAMPOS"] }
     ]
   },
   "EDUARDO PI\xD1A": {
@@ -294,6 +327,61 @@ VENDOR_PROFILES["JOHNATAN SOTO VILLA DEL ROS"] = mikelProfile;
 VENDOR_PROFILES["JOHNATAN"] = mikelProfile;
 VENDOR_PROFILES["JONATHAN"] = mikelProfile;
 VENDOR_PROFILES["JHONATAN"] = mikelProfile;
+VENDOR_PROFILES["JAIDER MEDINA"] = VENDOR_PROFILES["JAIDER MEDINA - FOOD SERVICE NORTE"];
+var SUPERVISOR_PROFILES = {
+  "ALI PEREZ": {
+    canonicalUsername: "ALI PEREZ",
+    displayName: "Al\xED P\xE9rez (Supervisor)",
+    supervisedVendors: [
+      "ANGEL NAVARRO",
+      "MARIANGEL GONZALEZ",
+      "VICTOR CAMPOS",
+      "ELISA SOLER",
+      "LEONARDO RIOS",
+      "LUIS GUANIPA",
+      "OSCAR ORTIZ"
+    ]
+  }
+};
+function getSupervisorProfile(username) {
+  const norm = normalizeVendorName(username).replace(/^SUPERVISOR:/, "").trim();
+  if (!norm) return null;
+  if (SUPERVISOR_PROFILES[norm]) return SUPERVISOR_PROFILES[norm];
+  const clean = norm.replace(/[^A-Z0-9]/g, "");
+  for (const [k, sup] of Object.entries(SUPERVISOR_PROFILES)) {
+    if (k.replace(/[^A-Z0-9]/g, "") === clean) return sup;
+  }
+  return null;
+}
+function getSupervisedRoutes(supervisorUsername) {
+  const sup = getSupervisorProfile(supervisorUsername);
+  if (!sup) return [];
+  const routes = [];
+  const seen = /* @__PURE__ */ new Set();
+  sup.supervisedVendors.forEach((vKey) => {
+    const prof = VENDOR_PROFILES[vKey];
+    if (prof) {
+      prof.routes.forEach((r) => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          routes.push(r);
+        }
+      });
+    }
+  });
+  return routes;
+}
+function getSupervisedAliases(supervisorUsername) {
+  const sup = getSupervisorProfile(supervisorUsername);
+  if (!sup) return [];
+  const routes = getSupervisedRoutes(supervisorUsername);
+  return Array.from(
+    /* @__PURE__ */ new Set([
+      ...sup.supervisedVendors,
+      ...routes.flatMap((r) => [r.id, ...r.aliases])
+    ])
+  );
+}
 function matchesVendorAlias(aliases, sheetVendor) {
   const normSheet = normalizeVendorName(sheetVendor);
   if (!normSheet) return false;
@@ -470,30 +558,36 @@ async function startServer() {
     "ADMIN": { password: process.env.ADMIN_PASSWORD || "123", role: "ADMIN", vendorId: "ADMIN" },
     "MARIA BRICE\xD1O": { password: "15937615", role: "VENDEDOR", vendorId: "1" },
     "MARIANA CHACIN": { password: "15260049", role: "VENDEDOR", vendorId: "2" },
-    "MIKELANGELO DIAZ": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "MIKELANGELODIAZ@GMAIL.COM": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "MIKELANGELO": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "MIKELANGELO DIAZ1": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
+    "MIKELANGELO DIAZ": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "MIKELANGELODIAZ@GMAIL.COM": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "MIKELANGELO": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "MIKELANGELO DIAZ1": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
     "MIKELANGELO DIAZ - VILLA DEL ROS": { password: "20863632", role: "VENDEDOR", vendorId: "37" },
     "MIKELANGELO DIAZ VILLA DEL ROS": { password: "20863632", role: "VENDEDOR", vendorId: "37" },
     "MIKELANGELO VILLA DEL ROS": { password: "20863632", role: "VENDEDOR", vendorId: "37" },
-    "JOHNATAN SOTO": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "JOHNATAN": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "JONATHAN": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
-    "JHONATAN": { password: "20863632", role: "VENDEDOR", vendorId: "47" },
+    "JOHNATAN SOTO": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "JOHNATAN": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "JONATHAN": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
+    "JHONATAN": { password: "20863632", role: "VENDEDOR", vendorId: "3" },
     "HERNAN PAZ": { password: "15405797", role: "VENDEDOR", vendorId: "4" },
     "OSWALDO CHURION": { password: "13754472", role: "VENDEDOR", vendorId: "7" },
     "CARLOS FUENMAYOR": { password: "18741545", role: "VENDEDOR", vendorId: "12" },
     "SARAH REYES": { password: "18663070", role: "VENDEDOR", vendorId: "14" },
     "J PABLO ARAUJO - CAB/OJE": { password: "15239697", role: "VENDEDOR", vendorId: "15" },
     "JOSE G. GONZALEZ": { password: "13262058", role: "VENDEDOR", vendorId: "16" },
+    "FOOD SERVICE SUR": { password: "19", role: "VENDEDOR", vendorId: "19" },
+    "JAIDER MEDINA - FOOD SERVICE NORTE": { password: "20", role: "VENDEDOR", vendorId: "20" },
+    "JAIDER MEDINA": { password: "20", role: "VENDEDOR", vendorId: "20" },
     "ANGELICA MORENO": { password: "14682378", role: "VENDEDOR", vendorId: "21" },
     "ADEL JARABA": { password: "11719291", role: "VENDEDOR", vendorId: "22" },
     "JUAN HERNANDEZ": { password: "14658122", role: "VENDEDOR", vendorId: "24" },
     "YOLEIDA LUGO": { password: "10083900", role: "VENDEDOR", vendorId: "25" },
     "SAIRU VALLES": { password: "18383237", role: "VENDEDOR", vendorId: "26" },
     "ELISA SOLER": { password: "12330043", role: "VENDEDOR", vendorId: "28" },
-    "ALI PEREZ": { password: "19117934", role: "VENDEDOR", vendorId: "29" },
+    "ALI PEREZ": { password: "19117934", role: "SUPERVISOR", vendorId: "SUPERVISOR_ALI_PEREZ" },
+    "ANGEL NAVARRO": { password: "19117934", role: "VENDEDOR", vendorId: "29" },
+    "MARIANGEL GONZALEZ": { password: "19117934", role: "VENDEDOR", vendorId: "47" },
+    "VICTOR CAMPOS": { password: "19117934", role: "VENDEDOR", vendorId: "48" },
     "J PABLO ARAUJO": { password: "15239697", role: "VENDEDOR", vendorId: "31" },
     "EDUARDO PI\xD1A": { password: "11878063", role: "VENDEDOR", vendorId: "33" },
     "JOHNATAN SOTO VILLA DEL ROS": { password: "18395226", role: "VENDEDOR", vendorId: "37" },
@@ -512,6 +606,7 @@ async function startServer() {
       const usuarioUpper = String(username).toUpperCase().trim();
       const pwd = String(password).trim();
       const pwdClean = pwd.replace(/\D/g, "");
+      const isNewFalconVendor = ["ANGEL NAVARRO", "MARIANGEL GONZALEZ", "VICTOR CAMPOS"].includes(usuarioUpper);
       if (supabase) {
         try {
           const { data: supaUser, error: supaErr } = await supabase.from("usuarios").select("*").eq("username", usuarioUpper).maybeSingle();
@@ -521,13 +616,15 @@ async function startServer() {
             if (isBcrypt) {
               isValid = await import_bcryptjs.default.compare(pwd, supaUser.password_hash) || await import_bcryptjs.default.compare(pwdClean, supaUser.password_hash);
             } else {
-              isValid = pwd === supaUser.password_hash || pwdClean === supaUser.password_hash;
+              isValid = pwd === supaUser.password_hash || pwdClean === supaUser.password_hash || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === String(supaUser.vendor_id || ""));
             }
             if (isValid) {
+              const supProfile = getSupervisorProfile(supaUser.username);
+              const resolvedRole = supProfile ? "SUPERVISOR" : supaUser.role;
               const token2 = import_jsonwebtoken.default.sign(
                 {
                   username: supaUser.username,
-                  role: supaUser.role,
+                  role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
                 JWT_SECRET,
@@ -538,7 +635,7 @@ async function startServer() {
                 token: token2,
                 user: {
                   username: supaUser.username,
-                  role: supaUser.role,
+                  role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
                 source: "supabase"
@@ -567,7 +664,7 @@ async function startServer() {
         return res.status(401).json({ success: false, error: "Usuario no autorizado o no encontrado en la base de datos" });
       }
       const isMikel = usuarioUpper.includes("MIKELANGELO") || usuarioUpper.includes("SOTO") || usuarioUpper.includes("JOHNATAN");
-      const isValidPwd = pwd === creds.password || pwdClean === creds.password || isMikel && (pwdClean === "20863632" || pwdClean === "18395226");
+      const isValidPwd = pwd === creds.password || pwdClean === creds.password || isMikel && (pwdClean === "20863632" || pwdClean === "18395226") || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === creds.vendorId);
       if (!isValidPwd) {
         return res.status(401).json({ success: false, error: "Contrase\xF1a incorrecta" });
       }
@@ -595,11 +692,13 @@ async function startServer() {
     }
   });
   app2.get("/api/auth/me", authenticateToken, (req, res) => {
+    const supProfile = getSupervisorProfile(req.user?.username);
+    const resolvedRole = supProfile ? "SUPERVISOR" : req.user.role;
     return res.json({
       success: true,
       user: {
         username: req.user.username,
-        role: req.user.role,
+        role: resolvedRole,
         vendorId: req.user.vendorId
       }
     });
@@ -2315,6 +2414,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         for (let c = 2; c < header0.length; c += 3) {
           const vendorName = String(header0[c] || "").replace(/\s+/g, " ").trim();
           if (!vendorName) continue;
+          if (c >= 89 || SUPERVISOR_SUMMARY_COLUMNS.has(vendorName.toUpperCase())) continue;
           const metaKg = parseFloat(row[c]) || 0;
           const ejecutadoKg = parseFloat(row[c + 1]) || 0;
           if (metaKg > 0 || ejecutadoKg > 0) {
@@ -2334,6 +2434,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       }
     }
     const metasRows = [];
+    const gridVendorsSeen = /* @__PURE__ */ new Set();
     const gridSheet = workbook.Sheets["Grid de Activaci\xF3n por Vendedor"];
     if (gridSheet) {
       const gridJson = XLSX.utils.sheet_to_json(gridSheet, { header: 1 });
@@ -2341,6 +2442,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         const row = gridJson[i];
         if (!row || !row[0]) continue;
         const vName = String(row[0]).replace(/\s+/g, " ").trim();
+        if (SUPERVISOR_SUMMARY_COLUMNS.has(vName.toUpperCase())) continue;
+        gridVendorsSeen.add(vName.toUpperCase().replace(/\s*-\s*/g, " - "));
         const cats = [
           { name: "ACEITE", metaIdx: 2, actIdx: 3 },
           { name: "AZ\xDACAR", metaIdx: 4, actIdx: 5 },
@@ -2406,19 +2509,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     } catch (vErr) {
       console.warn("[SERVER] Error sincronizando ventas_volumen:", vErr?.message);
     }
-    try {
-      if (metasRows.length > 0) {
-        await supabase.from("metas_activacion").delete().eq("periodo", metasPeriodoActual());
-        for (let i = 0; i < metasRows.length; i += 100) {
-          const batch = metasRows.slice(i, i + 100);
-          const { error: insMetaErr } = await supabase.from("metas_activacion").insert(batch);
-          if (insMetaErr) throw new Error(`insert lote ${i}: ${insMetaErr.message}`);
-        }
-      }
-    } catch (mErr) {
-      console.warn("[SERVER] Error sincronizando metas_activacion:", mErr?.message);
-    }
     let allClients = [];
+    const clientActByVendor = /* @__PURE__ */ new Map();
     try {
       let from = 0;
       while (true) {
@@ -2444,6 +2536,22 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           const hasAsturias = cAsturias > 0;
           const hasSalpicao = cSalpicao > 0;
           const isActivo = hasAceite || hasAzucar || hasPollo || hasAsturias || hasSalpicao;
+          const vNorm = normalizeVendorName(c.vendedor_nombre || c.vendedor_id || "");
+          if (!clientActByVendor.has(vNorm)) {
+            clientActByVendor.set(vNorm, {
+              "ACEITE": 0,
+              "AZUCAR": 0,
+              "POLLO": 0,
+              "ESTANDAR Y SUPERIOR ASTURIAS": 0,
+              "MORTADELA SALPICAO Y ASTURIAS": 0
+            });
+          }
+          const vCounts = clientActByVendor.get(vNorm);
+          if (hasAceite) vCounts["ACEITE"]++;
+          if (hasAzucar) vCounts["AZUCAR"]++;
+          if (hasPollo) vCounts["POLLO"]++;
+          if (hasAsturias) vCounts["ESTANDAR Y SUPERIOR ASTURIAS"]++;
+          if (hasSalpicao) vCounts["MORTADELA SALPICAO Y ASTURIAS"]++;
           updateBatch.push({
             id: c.id,
             periodo: "2026-10",
@@ -2471,6 +2579,39 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       }
     } catch (cErr) {
       console.warn("[SERVER] Error sincronizando activacion_clientes:", cErr?.message);
+    }
+    try {
+      for (const m of metasRows) {
+        if (m.activados === 0) {
+          const vNorm = normalizeVendorName(m.vendedor_id);
+          const vCounts = clientActByVendor.get(vNorm);
+          if (vCounts && vCounts[m.categoria] !== void 0) {
+            m.activados = vCounts[m.categoria];
+          }
+        }
+      }
+      if (!metasRows.some((m) => normalizeVendorName(m.vendedor_id).includes("ANGEL NAVARRO"))) {
+        const angelCounts = clientActByVendor.get("ANGEL NAVARRO") || {};
+        for (const cat of ["ACEITE", "AZUCAR", "POLLO", "ESTANDAR Y SUPERIOR ASTURIAS", "MORTADELA SALPICAO Y ASTURIAS"]) {
+          metasRows.push({
+            periodo: metasPeriodoActual(),
+            vendedor_id: "ANGEL NAVARRO",
+            categoria: cat,
+            meta: 0,
+            activados: angelCounts[cat] || 0
+          });
+        }
+      }
+      if (metasRows.length > 0) {
+        await supabase.from("metas_activacion").delete().eq("periodo", metasPeriodoActual());
+        for (let i = 0; i < metasRows.length; i += 100) {
+          const batch = metasRows.slice(i, i + 100);
+          const { error: insMetaErr } = await supabase.from("metas_activacion").insert(batch);
+          if (insMetaErr) throw new Error(`insert lote ${i}: ${insMetaErr.message}`);
+        }
+      }
+    } catch (mErr) {
+      console.warn("[SERVER] Error sincronizando metas_activacion:", mErr?.message);
     }
     return {
       countVolumen: volumenRows.length,
@@ -2540,7 +2681,8 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
   }
   async function histResolveScope(req) {
     const user = req.user || {};
-    const role = String(user.role || "").toUpperCase();
+    const supProfile = getSupervisorProfile(user.username);
+    const role = supProfile ? "SUPERVISOR" : String(user.role || "").toUpperCase();
     const q = String(req.query.vendedor || "").trim();
     const qU = q.toUpperCase();
     const known = await histGetVendorNames();
@@ -2557,12 +2699,35 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     };
     if (role === "ADMIN") {
       if (!q || qU === "ADMIN" || qU === "TODOS" || qU === "TODOS LOS VENDEDORES") return { all: true, names: [], aliases: [] };
+      if (qU.startsWith("SUPERVISOR:")) {
+        const supAliases = getSupervisedAliases(q.slice("SUPERVISOR:".length));
+        return { all: false, names: toNames(supAliases), aliases: supAliases.map(normHist) };
+      }
       if (qU.startsWith("CONSOLIDATED:")) {
         const prof = getVendorProfile(q.slice("CONSOLIDATED:".length));
         return { all: false, names: toNames(prof.routes.flatMap((r2) => r2.aliases)), aliases: prof.routes.flatMap((r2) => [r2.id, ...r2.aliases]).map(normHist) };
       }
       const r = findRoute(q);
       return { all: false, names: toNames(r ? r.aliases : [q]), aliases: (r ? [r.id, ...r.aliases] : [q]).map(normHist) };
+    }
+    if (role === "SUPERVISOR") {
+      const mySup = supProfile || getSupervisorProfile(String(user.username || ""));
+      const supName = mySup?.canonicalUsername || String(user.username || "");
+      const allSupAliases = getSupervisedAliases(supName);
+      if (!q || qU === "SUPERVISOR_ALL" || qU === "ALL_MY_ROUTES" || qU.startsWith("SUPERVISOR:")) {
+        return { all: false, names: toNames(allSupAliases), aliases: allSupAliases.map(normHist) };
+      }
+      const targetVendor = q.replace(/^CONSOLIDATED:/i, "");
+      const supRoutes = getSupervisedRoutes(supName);
+      const matchedRoute = supRoutes.find((r) => r.id === targetVendor || r.aliases.some((a) => normHist(a) === normHist(targetVendor)));
+      if (matchedRoute) {
+        return { all: false, names: toNames(matchedRoute.aliases), aliases: [matchedRoute.id, ...matchedRoute.aliases].map(normHist) };
+      }
+      if (mySup?.supervisedVendors.some((v) => normHist(v) === normHist(targetVendor))) {
+        const prof = getVendorProfile(targetVendor);
+        return { all: false, names: toNames(prof.routes.flatMap((r) => r.aliases)), aliases: prof.routes.flatMap((r) => [r.id, ...r.aliases]).map(normHist) };
+      }
+      return { all: false, names: toNames(allSupAliases), aliases: allSupAliases.map(normHist) };
     }
     const profile = getVendorProfile(String(user.username || ""));
     let routes = profile.routes;
@@ -3252,33 +3417,79 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
   let cachedMetasParsed = null;
   let lastMetasParsedTime = 0;
   const PARSED_DATA_TTL = 6e4;
+  const resolveDataFilter = (user, queryVendedor) => {
+    const supProfile = getSupervisorProfile(user?.username);
+    const effectiveRole = supProfile ? "SUPERVISOR" : String(user?.role || "").toUpperCase();
+    const rawQuery = String(queryVendedor || "").trim();
+    const rawUpper = rawQuery.toUpperCase();
+    if (effectiveRole === "SUPERVISOR") {
+      const supName = supProfile?.canonicalUsername || String(user?.username || "").toUpperCase().trim();
+      if (!rawUpper || rawUpper === "SUPERVISOR_ALL" || rawUpper === "ALL_MY_ROUTES" || rawUpper.startsWith("SUPERVISOR:")) {
+        return {
+          vendorFilter: `SUPERVISOR:${supName}`,
+          allowedAliases: getSupervisedAliases(supName)
+        };
+      }
+      const target = rawUpper.replace(/^CONSOLIDATED:/i, "").trim();
+      const supRoutes = getSupervisedRoutes(supName);
+      const matchedRoute = supRoutes.find((r) => matchesVendorAlias([r.id, ...r.aliases], target));
+      if (matchedRoute) {
+        return {
+          vendorFilter: matchedRoute.id,
+          allowedAliases: [matchedRoute.id, ...matchedRoute.aliases]
+        };
+      }
+      if (supProfile?.supervisedVendors.some((v) => matchesVendorAlias([v], target))) {
+        const prof2 = getVendorProfile(target);
+        return {
+          vendorFilter: target,
+          allowedAliases: prof2.routes.flatMap((r) => [r.id, ...r.aliases, prof2.canonicalUsername, prof2.displayName])
+        };
+      }
+      return {
+        vendorFilter: `SUPERVISOR:${supName}`,
+        allowedAliases: getSupervisedAliases(supName)
+      };
+    }
+    if (effectiveRole === "VENDEDOR") {
+      const prof2 = getVendorProfile(user?.username || "");
+      return {
+        vendorFilter: (user?.username || "").toUpperCase().trim(),
+        allowedAliases: prof2.routes.flatMap((r) => [r.id, ...r.aliases, prof2.canonicalUsername, prof2.displayName])
+      };
+    }
+    if (!rawUpper || rawUpper === "ADMIN" || rawUpper === "TODOS" || rawUpper === "ALL_MY_ROUTES") {
+      return { vendorFilter: null, allowedAliases: [] };
+    }
+    if (rawUpper.startsWith("SUPERVISOR:")) {
+      const supName = rawUpper.slice("SUPERVISOR:".length).trim();
+      return {
+        vendorFilter: rawUpper,
+        allowedAliases: getSupervisedAliases(supName)
+      };
+    }
+    const cleanParam = rawUpper.replace(/^CONSOLIDATED:/i, "").trim();
+    const prof = getVendorProfile(cleanParam);
+    return {
+      vendorFilter: cleanParam,
+      allowedAliases: prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName])
+    };
+  };
   app2.get("/api/data/volumen", authenticateToken, async (req, res) => {
     try {
       const user = req.user;
       const force = req.query.force === "true";
-      let vendorFilter = null;
-      let allowedAliases = [];
-      if (user.role === "VENDEDOR") {
-        const prof = getVendorProfile(user.username || "");
-        allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        vendorFilter = (user.username || "").toUpperCase().trim();
-      } else if (req.query.vendedor) {
-        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, "").toUpperCase().trim();
-        if (rawParam && rawParam !== "ADMIN" && rawParam !== "TODOS" && rawParam !== "ALL_MY_ROUTES") {
-          vendorFilter = rawParam;
-          const prof = getVendorProfile(vendorFilter);
-          allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        }
-      }
+      const { vendorFilter, allowedAliases } = resolveDataFilter(user, req.query.vendedor);
       const filterByVendor = (list) => {
-        if (!vendorFilter || vendorFilter === "ADMIN" || vendorFilter === "TODOS") return list;
-        return list.filter((d) => {
+        const nonSupervisorList = list.filter((d) => !SUPERVISOR_SUMMARY_COLUMNS.has(String(d.vendedorId || "").toUpperCase().trim()));
+        if (!vendorFilter || vendorFilter === "ADMIN" || vendorFilter === "TODOS") return nonSupervisorList;
+        return nonSupervisorList.filter((d) => {
           const vNombre = (d.vendedorNombre || "").toUpperCase();
           const vId = (d.vendedorId || "").toUpperCase();
           if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId) || matchesVendorAlias([vendorFilter, ...allowedAliases], vNombre)) {
             return true;
           }
-          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+          if (vendorFilter && !vendorFilter.startsWith("SUPERVISOR:") && !/^\d+$/.test(vendorFilter)) {
             if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
           }
           return allowedAliases.some((a) => {
@@ -3360,6 +3571,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           for (let c = 2; c < header0.length; c += 3) {
             const vendorName = String(header0[c] || "").replace(/\s+/g, " ").trim();
             if (!vendorName) continue;
+            if (c >= 89 || SUPERVISOR_SUMMARY_COLUMNS.has(vendorName.toUpperCase())) continue;
             const metaKg = parseFloat(row[c]) || 0;
             const ejecutadoKg = parseFloat(row[c + 1]) || 0;
             if (metaKg > 0 || ejecutadoKg > 0) {
@@ -3419,20 +3631,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     try {
       const user = req.user;
       const force = req.query.force === "true";
-      let vendorFilter = null;
-      let allowedAliases = [];
-      if (user.role === "VENDEDOR") {
-        const prof = getVendorProfile(user.username || "");
-        allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        vendorFilter = (user.username || "").toUpperCase().trim();
-      } else if (req.query.vendedor) {
-        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, "").toUpperCase().trim();
-        if (rawParam && rawParam !== "ADMIN" && rawParam !== "TODOS" && rawParam !== "ALL_MY_ROUTES") {
-          vendorFilter = rawParam;
-          const prof = getVendorProfile(vendorFilter);
-          allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        }
-      }
+      const { vendorFilter, allowedAliases } = resolveDataFilter(user, req.query.vendedor);
       const filterByVendor = (list) => {
         if (!vendorFilter || vendorFilter === "ADMIN" || vendorFilter === "TODOS") return list;
         return list.filter((d) => {
@@ -3441,7 +3640,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId) || matchesVendorAlias([vendorFilter, ...allowedAliases], vNombre)) {
             return true;
           }
-          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+          if (vendorFilter && !vendorFilter.startsWith("SUPERVISOR:") && !/^\d+$/.test(vendorFilter)) {
             if (vNombre.includes(vendorFilter) || vId.includes(vendorFilter)) return true;
           }
           return allowedAliases.some((a) => {
@@ -3542,6 +3741,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           const cleanCodigo = codigo.replace(/^0+/, "") || codigo;
           const razonSocial = String(row[1] || "").trim();
           const vendedor = String(row[2] || "").replace(/\s+/g, " ").trim();
+          if (vendedor.toUpperCase() === "ALI PEREZ") continue;
           const cAceite = mapAceite.get(codigo) || mapAceite.get(cleanCodigo) || 0;
           const cAzucar = mapAzucar.get(codigo) || mapAzucar.get(cleanCodigo) || 0;
           const cPollo = mapPollo.get(codigo) || mapPollo.get(cleanCodigo) || 0;
@@ -3597,20 +3797,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     try {
       const user = req.user;
       const force = req.query.force === "true";
-      let vendorFilter = null;
-      let allowedAliases = [];
-      if (user.role === "VENDEDOR") {
-        const prof = getVendorProfile(user.username || "");
-        allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        vendorFilter = (user.username || "").toUpperCase().trim();
-      } else if (req.query.vendedor) {
-        const rawParam = String(req.query.vendedor).replace(/^CONSOLIDATED:/i, "").toUpperCase().trim();
-        if (rawParam && rawParam !== "ADMIN" && rawParam !== "TODOS" && rawParam !== "ALL_MY_ROUTES") {
-          vendorFilter = rawParam;
-          const prof = getVendorProfile(vendorFilter);
-          allowedAliases = prof.routes.flatMap((r) => [r.id, ...r.aliases, prof.canonicalUsername, prof.displayName]);
-        }
-      }
+      const { vendorFilter, allowedAliases } = resolveDataFilter(user, req.query.vendedor);
       const filterByVendor = (list) => {
         if (!vendorFilter || vendorFilter === "ADMIN" || vendorFilter === "TODOS") return list;
         return list.filter((d) => {
@@ -3618,7 +3805,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           if (matchesVendorAlias([vendorFilter, ...allowedAliases], vId)) {
             return true;
           }
-          if (vendorFilter && !/^\d+$/.test(vendorFilter)) {
+          if (vendorFilter && !vendorFilter.startsWith("SUPERVISOR:") && !/^\d+$/.test(vendorFilter)) {
             if (vId.includes(vendorFilter) || vendorFilter.includes(vId)) return true;
           }
           return allowedAliases.some((a) => {

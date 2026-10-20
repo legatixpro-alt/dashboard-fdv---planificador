@@ -7,10 +7,14 @@ import { supabase, hasValidSupabaseConfig } from './lib/supabase';
 import { verifyServerSession, clearAuthSession, saveAuthSession } from './services/authService';
 import { 
   getVendorProfile, 
+  getSupervisorProfile,
+  getSupervisedRoutes,
+  getSupervisedAliases,
   getAllowedRoutesForUser, 
   isRouteMatch, 
   matchesVendorAlias,
   VENDOR_PROFILES, 
+  SUPERVISOR_PROFILES,
   normalizeVendorName,
   VendorProfile
 } from './utils/vendorRoutes';
@@ -75,6 +79,11 @@ export default function App() {
         setLoggedInVendor(sessionRes.user.username);
         if (sessionRes.user.role === 'ADMIN') {
           setActiveVendedorId(localStorage.getItem('dashboard_fdv_active_route') || 'ADMIN');
+        } else if (sessionRes.user.role === 'SUPERVISOR') {
+          const supProf = getSupervisorProfile(sessionRes.user.username);
+          const defaultRoute = `SUPERVISOR:${supProf?.canonicalUsername || sessionRes.user.username}`;
+          const savedRoute = localStorage.getItem('dashboard_fdv_active_route');
+          setActiveVendedorId(savedRoute || defaultRoute);
         } else {
           const profile = getVendorProfile(sessionRes.user.username);
           const initialRoute = profile.routes.length > 1 ? 'ALL_MY_ROUTES' : (profile.routes[0]?.id || profile.canonicalUsername);
@@ -88,14 +97,35 @@ export default function App() {
     return () => { isMounted = false; };
   }, [isLoggedIn]);
 
+  // Perfil del supervisor logueado (si aplica)
+  const currentSupervisorProfile = useMemo(() => {
+    if (userRole !== 'SUPERVISOR') return null;
+    return getSupervisorProfile(loggedInVendor);
+  }, [userRole, loggedInVendor]);
+
   // Perfil del vendedor logueado (garantiza privacidad total)
   const currentVendorProfile = useMemo(() => {
-    if (userRole === 'ADMIN') return null;
+    if (userRole === 'ADMIN' || userRole === 'SUPERVISOR') return null;
     return getVendorProfile(loggedInVendor);
   }, [userRole, loggedInVendor]);
 
-  // Protección de acceso: asegurar que un vendedor NUNCA esté en una ruta ajena
+  // Protección de acceso: asegurar que un vendedor o supervisor NUNCA esté en una ruta ajena
   useEffect(() => {
+    if (userRole === 'SUPERVISOR' && currentSupervisorProfile) {
+      const supKey = `SUPERVISOR:${currentSupervisorProfile.canonicalUsername}`;
+      const supRoutes = getSupervisedRoutes(currentSupervisorProfile.canonicalUsername);
+      const allowedRouteIds = [
+        supKey,
+        ...currentSupervisorProfile.supervisedVendors.map(v => `CONSOLIDATED:${v}`),
+        ...supRoutes.map(r => r.id)
+      ];
+      if (!allowedRouteIds.includes(activeVendedorId)) {
+        setActiveVendedorId(supKey);
+        localStorage.setItem('dashboard_fdv_active_route', supKey);
+      }
+      return;
+    }
+
     if (userRole === 'VENDEDOR' && currentVendorProfile) {
       const routes = currentVendorProfile.routes || [];
       const allowedRouteIds = [
@@ -123,7 +153,7 @@ export default function App() {
         localStorage.setItem('dashboard_fdv_active_route', matchedRouteId);
       }
     }
-  }, [userRole, loggedInVendor, currentVendorProfile, activeVendedorId]);
+  }, [userRole, loggedInVendor, currentVendorProfile, currentSupervisorProfile, activeVendedorId]);
 
   const loadData = useCallback(async (force = false, showLoader = false) => {
     if (!localStorage.getItem('dashboard_fdv_token')) {
@@ -132,7 +162,11 @@ export default function App() {
     }
     if (showLoader) setLoading(true);
     try {
-      const targetVendor = userRole === 'ADMIN' ? undefined : (loggedInVendor || undefined);
+      const targetVendor = userRole === 'ADMIN'
+        ? undefined
+        : userRole === 'SUPERVISOR'
+        ? `SUPERVISOR:${loggedInVendor}`
+        : (loggedInVendor || undefined);
       const [vol, act, metas] = await Promise.all([
         fetchVolumenData(force, targetVendor),
         fetchActivacionData(force, targetVendor),
@@ -243,6 +277,16 @@ export default function App() {
         localStorage.setItem('dashboard_fdv_role', 'ADMIN');
         localStorage.setItem('dashboard_fdv_vendor', 'ADMIN');
         localStorage.setItem('dashboard_fdv_active_route', 'ADMIN');
+      } else if (role === 'SUPERVISOR') {
+        const supProf = getSupervisorProfile(usuarioUpper);
+        const canonicalSup = supProf?.canonicalUsername || usuarioUpper;
+        initialRoute = `SUPERVISOR:${canonicalSup}`;
+        setUserRole('SUPERVISOR');
+        setLoggedInVendor(canonicalSup);
+        setActiveVendedorId(initialRoute);
+        localStorage.setItem('dashboard_fdv_role', 'SUPERVISOR');
+        localStorage.setItem('dashboard_fdv_vendor', canonicalSup);
+        localStorage.setItem('dashboard_fdv_active_route', initialRoute);
       } else {
         const profile = getVendorProfile(usuarioUpper);
         setUserRole('VENDEDOR');
@@ -306,12 +350,20 @@ export default function App() {
 
   // Opciones permitidas en el selector:
   // Si es VENDEDOR: NUNCA ve compañeros, solo sus rutas asignadas
-  // Si es ADMIN: ve todas las rutas para auditoría y supervisión
+  // Si es SUPERVISOR: ve su zona supervisada consolidada y los vendedores a su cargo
+  // Si es ADMIN: ve todas las rutas y supervisores para auditoría y supervisión
   const allowedDropdownOptions = useMemo(() => {
     if (userRole === 'ADMIN') {
       const adminOptions: { value: string; label: string }[] = [
         { value: 'ADMIN', label: 'TODOS LOS VENDEDORES (EMPRESA COMPLETA)' }
       ];
+
+      Object.values(SUPERVISOR_PROFILES).forEach(sup => {
+        adminOptions.push({
+          value: `SUPERVISOR:${sup.canonicalUsername}`,
+          label: `👥 Supervisor: ${sup.displayName} (Zona Falcón / Paraguaná - ${sup.supervisedVendors.length} vendedores)`
+        });
+      });
 
       const seenProfiles = new Set<string>();
       const distinctProfiles: VendorProfile[] = [];
@@ -341,6 +393,33 @@ export default function App() {
       return adminOptions;
     }
 
+    if (userRole === 'SUPERVISOR' && currentSupervisorProfile) {
+      const supOptions: { value: string; label: string }[] = [
+        {
+          value: `SUPERVISOR:${currentSupervisorProfile.canonicalUsername}`,
+          label: `👥 Zona Supervisada ${currentSupervisorProfile.displayName} (Consolidado)`
+        }
+      ];
+
+      currentSupervisorProfile.supervisedVendors.forEach(vendorKey => {
+        const prof = VENDOR_PROFILES[vendorKey];
+        if (!prof) return;
+        if (prof.routes.length > 1) {
+          supOptions.push({
+            value: `CONSOLIDATED:${prof.canonicalUsername}`,
+            label: `👤 ${prof.displayName} (Consolidado - ${prof.routes.length} rutas)`
+          });
+          prof.routes.forEach(r => {
+            supOptions.push({ value: r.id, label: `   ↳ ${r.label}` });
+          });
+        } else if (prof.routes.length === 1) {
+          supOptions.push({ value: prof.routes[0].id, label: `👤 ${prof.displayName}` });
+        }
+      });
+
+      return supOptions;
+    }
+
     // PRIVACIDAD ESTRICTA PARA VENDEDORES
     if (!currentVendorProfile) return [];
     const routes = currentVendorProfile.routes || [];
@@ -354,12 +433,17 @@ export default function App() {
       ];
     }
     return routes.map(r => ({ value: r.id, label: r.label }));
-  }, [userRole, currentVendorProfile]);
+  }, [userRole, currentVendorProfile, currentSupervisorProfile]);
 
   // Nombre legible del vendedor o ruta activa
   const activeVendedorDisplayName = useMemo(() => {
-    if (userRole === 'ADMIN') {
+    if (userRole === 'ADMIN' || userRole === 'SUPERVISOR') {
       if (activeVendedorId === 'ADMIN') return 'TODOS LOS VENDEDORES';
+      if (activeVendedorId.startsWith('SUPERVISOR:')) {
+        const rawSup = activeVendedorId.replace('SUPERVISOR:', '');
+        const supProf = getSupervisorProfile(rawSup);
+        return supProf ? `SUPERVISOR: ${supProf.displayName} (ZONA FALCÓN / PARAGUANÁ)` : rawSup;
+      }
       if (activeVendedorId.startsWith('CONSOLIDATED:')) {
         const rawTarget = activeVendedorId.replace('CONSOLIDATED:', '');
         const prof = getVendorProfile(rawTarget);
@@ -372,7 +456,7 @@ export default function App() {
         }
       }
       const opt = allowedDropdownOptions.find(o => o.value === activeVendedorId);
-      return opt ? opt.label.replace(/^👤\s*/, '').replace(/^\s*↳\s*/, '').trim() : activeVendedorId;
+      return opt ? opt.label.replace(/^[👤👥]\s*/, '').replace(/^\s*↳\s*/, '').trim() : activeVendedorId;
     }
     if (!currentVendorProfile) return activeVendedorId;
     if (activeVendedorId === 'ALL_MY_ROUTES') {
@@ -395,12 +479,21 @@ export default function App() {
     const exactMatches = metasActivacion.filter(m => isRouteMatch(m.vendedorId, activeVendedorId, loggedInVendor, userRole));
     if (exactMatches.length > 0) return exactMatches;
 
+    // Si es una vista de supervisor consolidada
+    if (activeVendedorId.startsWith('SUPERVISOR:')) {
+      const supName = activeVendedorId.replace(/^SUPERVISOR:/, '');
+      const supAliases = getSupervisedAliases(supName);
+      if (supAliases.length > 0) {
+        return metasActivacion.filter(m => matchesVendorAlias(supAliases, m.vendedorId));
+      }
+    }
+
     // Si no hay fila exacta para la sub-ruta seleccionada en el grid de metas, asociar con el perfil correspondiente
     if (userRole === 'VENDEDOR' && currentVendorProfile) {
       const allAliases = [currentVendorProfile.canonicalUsername, currentVendorProfile.displayName, ...currentVendorProfile.routes.flatMap(r => r.aliases)];
       return metasActivacion.filter(m => matchesVendorAlias(allAliases, m.vendedorId));
     }
-    if (userRole === 'ADMIN' && activeVendedorId !== 'ADMIN') {
+    if ((userRole === 'ADMIN' || userRole === 'SUPERVISOR') && activeVendedorId !== 'ADMIN') {
       const rawTarget = activeVendedorId.replace(/^CONSOLIDATED:/, '');
       const prof = getVendorProfile(rawTarget);
       if (prof) {
@@ -716,7 +809,11 @@ export default function App() {
                   <UserCircle className="w-4 h-4 text-red-500" />
                 </div>
                 <div className="flex flex-col flex-1">
-                  <span className="text-[10px] font-sans text-neutral-500 leading-none uppercase tracking-wider mb-0.5">Supervisión (Admin)</span>
+                  <span className="text-[10px] font-sans text-neutral-500 leading-none uppercase tracking-wider mb-0.5">
+                    {userRole === 'SUPERVISOR'
+                      ? `Supervisor: ${currentSupervisorProfile?.displayName || loggedInVendor}`
+                      : 'Supervisión (Admin)'}
+                  </span>
                   <select 
                     value={activeVendedorId}
                     onChange={(e) => handleRouteChange(e.target.value)}
