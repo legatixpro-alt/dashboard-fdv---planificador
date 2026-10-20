@@ -1,24 +1,45 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import React, { useMemo, useState } from 'react';
-import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User, CheckSquare, Square, Activity } from 'lucide-react';
 import { VolumenData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
+import { MESES_CORTO } from '../lib/rubros';
+import { HistVolumenRow, fetchHistVolumen } from '../services/historialService';
+import { SerieVolumen, construirSerie, sumarSerie } from '../lib/volumenHistorial';
+import { MonthFilter, PeriodoMes, mesKey, resolverSeleccionMeses } from './MonthFilter';
+import { VolumenDashboard360 } from './VolumenDashboard360';
 
 interface Props {
   filteredVolumen: VolumenData[];
   activeVendedorId: string;
+  /** Ruta/vendedor tal como lo maneja App; el servidor valida el alcance real con el JWT. */
+  vendedorFilter?: string;
 }
 
 interface SkuStats {
   skuId: string;
   articulo: string;
+  categoria?: string;
   meta: number;
   ejecutado: number;
   cumplimiento: number;
+  /** true cuando se muestra un mes histórico: no existe cuota guardada de meses anteriores. */
+  sinCuota?: boolean;
+  /** true cuando la fila del Sheet no tiene un criterio confiable para cruzarla con el historial. */
+  sinHist?: boolean;
 }
 
-export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId }) => {
+const CATEGORIAS_RAPIDAS: { cat: string; label: string }[] = [
+  { cat: 'ACEITE', label: 'Aceite' },
+  { cat: 'AZÚCAR', label: 'Azúcar' },
+  { cat: 'POLLO', label: 'Pollo' },
+  { cat: 'ESTANDAR Y SUPERIOR ASTURIAS', label: 'Est. y Sup. Asturias' },
+  { cat: 'MORTADELA SALPICAO Y ASTURIAS', label: 'Mort. Salpicao y Asturias' },
+  { cat: 'OTROS', label: 'Otros' }
+];
+
+export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId, vendedorFilter }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'focus' | 'hoja' | 'tarjetas'>('hoja');
 
@@ -68,9 +89,9 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
     const tableData = filteredSkuStats.map(stat => [
       stat.skuId,
       stat.articulo,
-      formatNumber(stat.meta),
-      formatNumber(stat.ejecutado),
-      (isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2) + '%'
+      stat.sinCuota ? '-' : formatNumber(stat.meta),
+      stat.sinHist ? '-' : formatNumber(stat.ejecutado),
+      stat.sinCuota ? '-' : (isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2) + '%'
     ]);
     
     tableData.push([
@@ -116,6 +137,7 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
         map.set(displaySku, {
           skuId: displaySku,
           articulo: v.articulo || getArticuloName(displaySku),
+          categoria: String((v as any).categoria || ''),
           meta: 0,
           ejecutado: 0,
           cumplimiento: 0
@@ -135,8 +157,91 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
     }).sort((a, b) => b.ejecutado - a.ejecutado); // Sort descending by executed
   }, [filteredVolumen]);
 
+  // ── Historial real (ventas_historial) + filtro de fechas + selección múltiple 360° ──
+  const vendedorHist = vendedorFilter || activeVendedorId;
+  const [histRows, setHistRows] = useState<HistVolumenRow[]>([]);
+  const [histLoading, setHistLoading] = useState(true);
+  const [histError, setHistError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setHistLoading(true);
+    setHistError(null);
+    fetchHistVolumen(vendedorHist)
+      .then((r) => {
+        if (alive) {
+          setHistRows(r.rows || []);
+          setHistLoading(false);
+        }
+      })
+      .catch((e: any) => {
+        if (alive) {
+          setHistError(e?.message || 'No se pudo consultar el historial de ventas');
+          setHistLoading(false);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [vendedorHist]);
+
+  const periodosHist = useMemo<PeriodoMes[]>(() => {
+    const m = new Map<string, PeriodoMes>();
+    histRows.forEach((r) => m.set(`${r.ano}-${r.mes}`, { ano: r.ano, mes: r.mes }));
+    return [...m.values()].sort((a, b) => a.ano - b.ano || a.mes - b.mes);
+  }, [histRows]);
+
+  const [mesesSel, setMesesSel] = useState<string[]>([]);
+  const { showActual, mesesHist } = resolverSeleccionMeses(mesesSel);
+  const useHist = mesesHist.length > 0;
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
+
+  const seriesMap = useMemo(() => {
+    const m = new Map<string, SerieVolumen>();
+    skuStats.forEach((st) => m.set(st.skuId, construirSerie(st.skuId, st.articulo, histRows)));
+    return m;
+  }, [skuStats, histRows]);
+
+  // Vista de la tabla: mes actual (con cuota) o suma real de los meses históricos elegidos (sin cuota)
+  const viewStats = useMemo<SkuStats[]>(() => {
+    if (!useHist) return skuStats;
+    return skuStats
+      .map((st) => {
+        const serie = seriesMap.get(st.skuId);
+        const sinHist = !serie || serie.criterio === 'NINGUNO';
+        const kg = (sinHist ? 0 : sumarSerie(serie!, mesesHist, 'kgs')) + (showActual ? st.ejecutado : 0);
+        return { ...st, meta: 0, ejecutado: Math.round(kg), cumplimiento: 0, sinCuota: true, sinHist };
+      })
+      .sort((a, b) => b.ejecutado - a.ejecutado);
+  }, [skuStats, seriesMap, useHist, mesesHist, showActual]);
+
+  const totalMostrado = viewStats.reduce((a, st) => a + (st.sinHist ? 0 : st.ejecutado), 0);
+  const etiquetaMeses = periodosHist
+    .filter((p) => mesesHist.includes(mesKey(p)))
+    .map((p) => `${MESES_CORTO[p.mes]} ${String(p.ano).slice(-2)}`)
+    .join(', ');
+
+  const toggleCode = (code: string) =>
+    setSelectedCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+  const toggleCategoria = (cat: string) => {
+    const codes = skuStats.filter((st) => (st.categoria || 'OTROS') === cat).map((st) => st.skuId);
+    if (codes.length === 0) return;
+    setSelectedCodes((prev) =>
+      codes.every((c) => prev.includes(c)) ? prev.filter((c) => !codes.includes(c)) : Array.from(new Set([...prev, ...codes]))
+    );
+  };
+  const itemsSel = selectedCodes
+    .map((code) => skuStats.find((st) => st.skuId === code))
+    .filter((st): st is SkuStats => !!st)
+    .map((st) => ({
+      codigo: st.skuId,
+      articulo: st.articulo,
+      cuota: st.meta,
+      ejecutado: st.ejecutado,
+      serie: seriesMap.get(st.skuId) || construirSerie(st.skuId, st.articulo, histRows)
+    }));
+
   // Apply search filter
-  let filteredSkuStats = skuStats.filter(stat => 
+  let filteredSkuStats = viewStats.filter(stat => 
     (stat.skuId || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
     (stat.articulo || '').toLowerCase().includes((searchTerm || '').toLowerCase())
   );
@@ -263,6 +368,57 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
 
       </div>
 
+      {/* FILTRO DE FECHAS + SELECCIÓN MÚLTIPLE PARA EL DASHBOARD 360° */}
+      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-4 space-y-3">
+        <MonthFilter periodos={periodosHist} selected={mesesSel} onChange={setMesesSel} incluirActual />
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-sans font-bold uppercase tracking-wider text-neutral-400 mr-1">
+            <Activity className="w-3.5 h-3.5 text-red-500" /> Tildar por rubro (selección múltiple):
+          </span>
+          {CATEGORIAS_RAPIDAS.map(({ cat, label }) => {
+            const codes = skuStats.filter((st) => (st.categoria || 'OTROS') === cat).map((st) => st.skuId);
+            if (codes.length === 0) return null;
+            const activo = codes.every((c) => selectedCodes.includes(c));
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => toggleCategoria(cat)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-sans font-bold border transition-all ${
+                  activo ? 'bg-red-600 text-white border-red-500' : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:text-white hover:border-neutral-600'
+                }`}
+              >
+                {activo ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5 opacity-60" />}
+                {label} ({codes.length})
+              </button>
+            );
+          })}
+          {selectedCodes.length > 0 && (
+            <button type="button" onClick={() => setSelectedCodes([])} className="px-2 py-1 text-[11px] font-sans text-neutral-500 hover:text-white">
+              Quitar selección ({selectedCodes.length})
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] font-sans text-neutral-500">
+          Tilda uno o varios productos en la tabla para abrir su Dashboard 360° con el volumen real de meses anteriores.
+          {histLoading && ' Cargando historial de ventas…'}
+          {histError && <span className="text-amber-400"> {histError}</span>}
+        </p>
+      </div>
+
+      {selectedCodes.length > 0 && (
+        <VolumenDashboard360
+          items={itemsSel}
+          periodos={periodosHist}
+          mesesSel={mesesSel}
+          loading={histLoading}
+          error={histError}
+          vendedorDisplayName={activeVendedorId}
+          onToggle={toggleCode}
+          onClear={() => setSelectedCodes([])}
+        />
+      )}
+
       {/* SECTION 2: VOLUMEN POR SKU (Hybrid Layout) */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
         {/* Header / Controls */}
@@ -306,6 +462,14 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
           </div>
         </div>
 
+        {useHist && (
+          <div className="px-4 py-2 bg-sky-950/20 border-b border-sky-900/40 text-[11px] font-sans text-sky-200">
+            Mostrando el volumen <strong>real vendido</strong> de: {etiquetaMeses}
+            {showActual ? ' + mes actual' : ''}. No hay cuota guardada de meses anteriores, por eso Cuota y % no aplican. Las filas con “—” no tienen un criterio
+            confiable para cruzarlas con el historial.
+          </div>
+        )}
+
         {/* User Summary Bar */}
         <div className="bg-black border-y border-neutral-800 p-4 flex flex-col md:flex-row justify-between md:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -321,12 +485,12 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
           <div className="flex items-center gap-4 sm:gap-6 divide-x divide-neutral-800">
             <div className="text-right">
               <div className="text-[9px] font-sans text-neutral-500 uppercase tracking-wider mb-1">Cuota Total</div>
-              <div className="text-sm md:text-base font-mono font-bold text-neutral-300">{formatNumber(totalMeta)}</div>
+              <div className="text-sm md:text-base font-mono font-bold text-neutral-300">{useHist ? '—' : formatNumber(totalMeta)}</div>
             </div>
             <div className="text-right pl-4 sm:pl-6">
               <div className="text-[9px] font-sans text-neutral-500 uppercase tracking-wider mb-1">Ejecutado</div>
               <div className="text-sm md:text-base font-mono font-bold text-emerald-400">
-                {formatNumber(totalEjecutado)} <span className="text-[10px] text-neutral-500 font-sans font-normal">KG</span>
+                {formatNumber(useHist ? totalMostrado : totalEjecutado)} <span className="text-[10px] text-neutral-500 font-sans font-normal">KG</span>
               </div>
             </div>
             <div className="text-right pl-4 sm:pl-6">
@@ -344,10 +508,11 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-red-700 border-b border-red-800 text-[10px] font-sans text-white uppercase tracking-wider">
+                <th className="p-3 font-bold border-r border-red-800 w-14 text-center" title="Tilda uno o varios productos para el Dashboard 360°">360°</th>
                 <th className="p-3 font-bold border-r border-red-800">Cod</th>
                 <th className="p-3 font-bold border-r border-red-800">Articulo</th>
                 <th className="p-3 font-bold text-right border-r border-red-800">Cuota</th>
-                <th className="p-3 font-bold text-right border-r border-red-800">KG</th>
+                <th className="p-3 font-bold text-right border-r border-red-800">{useHist ? 'KG (filtro)' : 'KG'}</th>
                 <th className="p-3 font-bold text-right">%</th>
               </tr>
             </thead>
@@ -359,14 +524,28 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                 
                 return (
                   <tr key={`${stat.skuId}-${idx}`} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
+                    <td className="p-3 border-r border-neutral-800/50 text-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleCode(stat.skuId)}
+                        title="Ver Dashboard 360° de volumen"
+                        className="inline-flex items-center justify-center text-neutral-500 hover:text-white"
+                      >
+                        {selectedCodes.includes(stat.skuId) ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
+                      </button>
+                    </td>
                     <td className="p-3 border-r border-neutral-800/50 text-red-500 font-bold">{stat.skuId}</td>
                     <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase">{stat.articulo}</td>
-                    <td className="p-3 border-r border-neutral-800/50 text-right text-neutral-400">{formatNumber(stat.meta)}</td>
-                    <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado)}</td>
+                    <td className="p-3 border-r border-neutral-800/50 text-right text-neutral-400">{stat.sinCuota ? '—' : formatNumber(stat.meta)}</td>
+                    <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{stat.sinHist ? '—' : stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado)}</td>
                     <td className="p-3 text-right">
-                      <span className={`inline-block px-2 py-1 rounded border text-[10px] font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
-                        {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
-                      </span>
+                      {stat.sinCuota ? (
+                        <span className="text-neutral-600">—</span>
+                      ) : (
+                        <span className={`inline-block px-2 py-1 rounded border text-[10px] font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
+                          {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -374,11 +553,12 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
               
               {/* TFOOT / TOTALS */}
               <tr className="border-t border-neutral-700 bg-neutral-900/30">
+                <td className="p-3 border-r border-neutral-800/50"></td>
                 <td className="p-3 border-r border-neutral-800/50 text-red-500 font-bold uppercase">Total</td>
                 <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase tracking-wider">Resumen Acumulado Vendedor</td>
-                <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{formatNumber(totalMeta)}</td>
-                <td className="p-3 border-r border-neutral-800/50 text-right text-emerald-400 font-bold">{formatNumber(totalEjecutado)}</td>
-                <td className="p-3 text-right text-red-400 font-bold">{(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2)}%</td>
+                <td className="p-3 border-r border-neutral-800/50 text-right text-white font-bold">{useHist ? '—' : formatNumber(totalMeta)}</td>
+                <td className="p-3 border-r border-neutral-800/50 text-right text-emerald-400 font-bold">{formatNumber(useHist ? totalMostrado : totalEjecutado)}</td>
+                <td className="p-3 text-right text-red-400 font-bold">{useHist ? '—' : `${(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2)}%`}</td>
               </tr>
             </tbody>
           </table>
@@ -397,10 +577,19 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                return (
                    <div key={`${stat.skuId}-${idx}`} className="bg-neutral-900 border border-neutral-800 rounded-lg p-3">
                        <div className="flex justify-between items-center mb-2">
-                           <span className="text-red-500 font-mono text-xs font-bold">{stat.skuId}</span>
-                           <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
-                               {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
-                           </span>
+                                                       <span className="flex items-center gap-2">
+                              <button type="button" onClick={() => toggleCode(stat.skuId)} title="Ver Dashboard 360° de volumen" className="text-neutral-500 hover:text-white">
+                                {selectedCodes.includes(stat.skuId) ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
+                              </button>
+                              <span className="text-red-500 font-mono text-xs font-bold">{stat.skuId}</span>
+                            </span>
+                            {stat.sinCuota ? (
+                              <span className="text-neutral-600 text-[10px]">sin cuota</span>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${isSuccess ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
+                                {(isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2)}%
+                              </span>
+                            )}
                        </div>
                        
                        <h4 className="text-white font-sans text-xs sm:text-sm font-bold mb-3 uppercase leading-tight">
@@ -410,11 +599,11 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId 
                        <div className="flex justify-between items-center border-t border-neutral-800 pt-2 mt-2">
                            <div>
                                <div className="text-[9px] text-neutral-500 uppercase tracking-wider">Cuota (KG)</div>
-                               <div className="text-neutral-400 font-mono text-xs mt-0.5">{formatNumber(stat.meta)}</div>
+                               <div className="text-neutral-400 font-mono text-xs mt-0.5">{stat.sinCuota ? '—' : formatNumber(stat.meta)}</div>
                            </div>
                            <div className="text-right">
                                <div className="text-[9px] text-neutral-500 uppercase tracking-wider">Ejecutado</div>
-                               <div className="text-white font-mono text-xs font-bold mt-0.5">{stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado)}</div>
+                               <div className="text-white font-mono text-xs font-bold mt-0.5">{stat.sinHist ? '—' : stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado)}</div>
                            </div>
                        </div>
                    </div>

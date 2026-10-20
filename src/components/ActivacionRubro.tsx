@@ -4,9 +4,9 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Target, Search, FileText, CheckCircle2, Droplets, Flame, Drumstick, Package as PkgIcon, Sparkles, CheckSquare, Square, Activity } from 'lucide-react';
 import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
-import { RubroCodigo } from '../lib/rubros';
+import { RubroCodigo, RUBROS_ACTIVACION } from '../lib/rubros';
 import { categoryToRubroCode } from '../services/historialService';
-import { RubroDashboard360 } from './RubroDashboard360';
+import { Rubro360Panel, RubroStatsActual } from './Rubro360Panel';
 
 interface Props {
   filteredVolumen: VolumenData[];
@@ -28,15 +28,18 @@ interface CategoriaStats {
 export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActivacion, metasActivacion, activeVendedorId, vendedorFilter }) => {
   
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedRubro, setSelectedRubro] = useState<RubroCodigo | null>(null);
+  const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
   const mesInfo = useMemo(() => getMesLaboralInfo(), []);
 
   const handleToggleRubro = (catOrCode: string | RubroCodigo, scrollToPanel = false) => {
     const code = categoryToRubroCode(catOrCode);
-    setSelectedRubro((prev) => {
-      const next = prev === code ? null : code;
-      if (next && scrollToPanel) {
+    setSelectedRubros((prev) => {
+      const yaEsta = prev.includes(code);
+      const next = (yaEsta ? prev.filter((r) => r !== code) : [...prev, code]).sort(
+        (a, b) => RUBROS_ACTIVACION.indexOf(a as any) - RUBROS_ACTIVACION.indexOf(b as any)
+      );
+      if (!yaEsta && scrollToPanel) {
         setTimeout(() => {
           dashboard360Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 80);
@@ -190,10 +193,15 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
 
   const totalEstCierre = categoriaStats.reduce((acc, curr) => acc + curr.estCierre, 0);
 
-  const selectedCategoriaStat = useMemo(() => {
-    if (!selectedRubro) return undefined;
-    return categoriaStats.find(c => categoryToRubroCode(c.categoria) === selectedRubro);
-  }, [selectedRubro, categoriaStats]);
+  const statsByRubro = useMemo(() => {
+    const out: Partial<Record<RubroCodigo, RubroStatsActual>> = {};
+    categoriaStats.forEach((c) => {
+      out[categoryToRubroCode(c.categoria)] = c;
+    });
+    return out;
+  }, [categoriaStats]);
+
+  const todosTildados = RUBROS_ACTIVACION.every((r) => selectedRubros.includes(r));
 
   return (
     <div className="space-y-6">
@@ -216,7 +224,7 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
         {categoriaStats.map((stat, i) => {
           const isSuccess = stat.cumplimiento >= 100;
           const rCode = categoryToRubroCode(stat.categoria);
-          const isSelected = selectedRubro === rCode;
+          const isSelected = selectedRubros.includes(rCode);
           return (
             <div
               key={i}
@@ -291,15 +299,15 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
       </div>
 
       {/* DASHBOARD 360° DEL RUBRO TILDADO */}
-      {selectedRubro && (
+      {selectedRubros.length > 0 && (
         <div ref={dashboard360Ref} className="animate-in fade-in slide-in-from-top-2 duration-300">
-          <RubroDashboard360
-            selectedRubro={selectedRubro}
-            onSelectRubro={(code) => setSelectedRubro(code)}
-            onClose={() => setSelectedRubro(null)}
+          <Rubro360Panel
+            rubrosSeleccionados={selectedRubros}
+            onToggleRubro={(code) => handleToggleRubro(code)}
+            onSetRubros={setSelectedRubros}
             vendedorFilter={vendedorFilter || activeVendedorId}
             vendedorDisplayName={activeVendedorId}
-            currentStats={selectedCategoriaStat}
+            statsByRubro={statsByRubro}
             filteredVolumen={filteredVolumen}
           />
         </div>
@@ -319,7 +327,7 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
                 Activación por Categoría
               </h2>
               <p className="text-[11px] font-sans text-neutral-400">
-                Haz clic o tilda cualquier fila para desplegar el historial de ventas 360° de ese rubro.
+                Tilda uno o varios rubros (selección múltiple) para desplegar su historial de ventas 360° y compararlos.
               </p>
             </div>
           </div>
@@ -346,7 +354,17 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
           <table className="w-full text-left border-collapse min-w-[850px]">
             <thead>
               <tr className="bg-neutral-900/50 border-b border-neutral-800 text-[10px] md:text-xs font-sans text-neutral-400 uppercase tracking-wider">
-                <th className="p-3 md:p-4 text-center w-14 border-r border-neutral-800">360°</th>
+                <th className="p-3 md:p-4 text-center w-14 border-r border-neutral-800">
+                  <button
+                    type="button"
+                    title={todosTildados ? 'Quitar los 5 rubros' : 'Tildar los 5 rubros'}
+                    onClick={() => setSelectedRubros(todosTildados ? [] : [...RUBROS_ACTIVACION])}
+                    className="inline-flex items-center justify-center gap-1 text-neutral-400 hover:text-white"
+                  >
+                    {todosTildados ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
+                    <span>360°</span>
+                  </button>
+                </th>
                 <th className="p-3 md:p-4 font-bold text-white border-r border-neutral-800">Categoría / Rubro</th>
                 <th className="p-3 md:p-4 text-center border-r border-neutral-800">Meta</th>
                 <th className="p-3 md:p-4 text-center text-emerald-400 border-r border-neutral-800">Activados</th>
@@ -361,7 +379,7 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
               {filteredStats.map((stat) => {
                  const isSuccess = stat.cumplimiento >= 100;
                  const rCode = categoryToRubroCode(stat.categoria);
-                 const isSelected = selectedRubro === rCode;
+                 const isSelected = selectedRubros.includes(rCode);
                  return (
                   <tr
                     key={stat.categoria}

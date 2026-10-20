@@ -2366,7 +2366,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           
           if (metaKg > 0 || ejecutadoKg > 0) {
             volumenRows.push({
-              periodo: '2026-10',
+              periodo: metasPeriodoActual(),
               sku,
               articulo,
               categoria: cat,
@@ -2452,10 +2452,11 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     // 4. Sincronizar volumen en Supabase
     try {
       if (volumenRows.length > 0) {
-        await supabase.from('ventas_volumen').delete().eq('periodo', '2026-10');
+        await supabase.from('ventas_volumen').delete().eq('periodo', metasPeriodoActual());
         for (let i = 0; i < volumenRows.length; i += 100) {
           const batch = volumenRows.slice(i, i + 100);
-          await supabase.from('ventas_volumen').insert(batch);
+          const { error: insVolErr } = await supabase.from('ventas_volumen').insert(batch);
+          if (insVolErr) throw new Error(`insert lote ${i}: ${insVolErr.message}`);
         }
       }
     } catch (vErr: any) {
@@ -2468,7 +2469,8 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         await supabase.from('metas_activacion').delete().eq('periodo', metasPeriodoActual());
         for (let i = 0; i < metasRows.length; i += 100) {
           const batch = metasRows.slice(i, i + 100);
-          await supabase.from('metas_activacion').insert(batch);
+          const { error: insMetaErr } = await supabase.from('metas_activacion').insert(batch);
+          if (insMetaErr) throw new Error(`insert lote ${i}: ${insMetaErr.message}`);
         }
       }
     } catch (mErr: any) {
@@ -2937,6 +2939,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           metaMesActual: 0,
           periodoMetaActual: null,
           metasPorMes: [],
+          periodosDisponibles: [],
           meses: [],
           skus: [],
           clientes: [],
@@ -2948,7 +2951,22 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         });
       }
 
-      const result = await histCached(`rub360:${rubroCode}:${scopeKey(scope)}`, async () => {
+      // Filtro opcional de meses (?meses=2026-3,2026-5). Vacío = todos los meses con historial.
+      const mesesFiltro: Set<string> | null = (() => {
+        const raw = String(req.query.meses || '').trim();
+        if (!raw) return null;
+        if (raw === 'none') return new Set<string>(); // ningún mes histórico seleccionado (solo mes actual)
+        const set = new Set<string>();
+        raw.split(',').forEach(tok => {
+          const m = tok.trim().match(/^(\d{4})-(\d{1,2})$/);
+          if (m) set.add(`${Number(m[1])}-${Number(m[2])}`);
+        });
+        return set.size > 0 ? set : null;
+      })();
+      const filtroKey = mesesFiltro ? [...mesesFiltro].sort().join(',') : 'ALL';
+
+      // Datos crudos (se consultan una vez por rubro+alcance; cambiar el filtro de meses no vuelve a consultar la BD)
+      const base = await histCached(`rub360base:${rubroCode}:${scopeKey(scope)}`, async () => {
         const [periodos, rows, cart, metas] = await Promise.all([
           histCached('periodos', () =>
             histFetchAll((a, b) => supabase!.from('hist_periodos').select('ano,mes').order('ano').order('mes').range(a, b))
@@ -2968,15 +2986,22 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             supabase!.from('metas_activacion').select('*').order('id').range(a, b)
           )
         ]);
+        return { periodos, rows, cart, metas };
+      });
+
+      const result = await histCached(`rub360:${rubroCode}:${scopeKey(scope)}:${filtroKey}`, async () => {
+        const { periodos, cart, metas } = base;
+        const rows = mesesFiltro ? base.rows.filter((r: any) => mesesFiltro.has(`${r.ano}-${r.mes}`)) : base.rows;
 
         const allowed = new Set(scope.names.map(normHist));
+        // activacion_clientes guarda el estado del mes en curso en has_<rubro> / cajas_<rubro>
         const isClientActiveInRubro = (c: any, rub: string): boolean => {
           switch (rub) {
-            case 'ACEITE': return !!c.aceite;
-            case 'AZUCAR': return !!c.azucar;
-            case 'POLLO': return !!(c.pollo ?? c.arroz);
-            case 'ESTANDAR_ASTURIAS': return !!(c.estandar_asturias ?? c.entero);
-            case 'MORTADELA_SALPICAO': return !!(c.mortadela_salpicao ?? c.ligeros);
+            case 'ACEITE': return !!c.has_aceite || nz(c.cajas_aceite) > 0;
+            case 'AZUCAR': return !!c.has_azucar || nz(c.cajas_azucar) > 0;
+            case 'POLLO': return !!c.has_pollo || nz(c.cajas_pollo) > 0;
+            case 'ESTANDAR_ASTURIAS': return !!c.has_estandar_asturias || nz(c.cajas_estandar_asturias) > 0;
+            case 'MORTADELA_SALPICAO': return !!c.has_mortadela_salpicao || nz(c.cajas_mortadela_salpicao) > 0;
             default: return false;
           }
         };
@@ -3024,7 +3049,10 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         const activadosMesActual = activadosGridActual > 0 ? activadosGridActual : activadosClientesActual;
 
         // 3. Estructuras de agregación histórica
-        const sortedPeriodos = [...periodos].sort((a: any, b: any) => a.ano - b.ano || a.mes - b.mes);
+        const periodosDisponibles = [...periodos].sort((a: any, b: any) => a.ano - b.ano || a.mes - b.mes);
+        const sortedPeriodos = mesesFiltro
+          ? periodosDisponibles.filter((p: any) => mesesFiltro.has(`${p.ano}-${p.mes}`))
+          : periodosDisponibles;
         const mesAggMap = new Map<string, {
           ano: number;
           mes: number;
@@ -3178,7 +3206,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
               else clientesFueraCartera++;
             }
           });
-          const prev = idx > 0 ? mesesList[idx - 1] : null;
+          // La variación solo se calcula contra el mes calendario inmediatamente anterior (si está visible)
+          const prevCand = idx > 0 ? mesesList[idx - 1] : null;
+          const prev = prevCand && (mAgg.ano * 12 + mAgg.mes) - (prevCand.ano * 12 + prevCand.mes) === 1 ? prevCand : null;
           const variacionClientes = prev !== null ? clientesActivados - prev.clientesActivados : null;
           const variacionPct = prev !== null && prev.clientesActivados > 0
             ? +(((clientesActivados - prev.clientesActivados) / prev.clientesActivados) * 100).toFixed(1)
@@ -3266,7 +3296,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           });
 
           if (mesesActivados > 0) clientesUnicosHistorico++;
-          if (mesesActivados >= 3) clientesHabituales++;
+          if (mesesActivados >= Math.max(1, Math.min(3, totalMesesDisponibles))) clientesHabituales++;
 
           let estado360: 'REACTIVADO_ESTE_MES' | 'NUEVO_ESTE_MES' | 'OPORTUNIDAD_RECUPERACION' | 'SIN_HISTORIAL' | 'FUERA_CARTERA';
           if (mesesActivados > 0 && activoMesActual) {
@@ -3335,6 +3365,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         return {
           rubro: rubroCode,
           periodos: sortedPeriodos,
+          periodosDisponibles,
           carteraTotal,
           activadosMesActual,
           metaMesActual,
@@ -3421,7 +3452,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           let from = 0;
           const pageSize = 1000;
           while (from < 10000) {
-            const { data, error } = await supabase.from('ventas_volumen').select('*').range(from, from + pageSize - 1);
+            const { data, error } = await supabase.from('ventas_volumen').select('*').eq('periodo', metasPeriodoActual()).order('id').range(from, from + pageSize - 1);
             if (error || !data || data.length === 0) break;
             supaRows.push(...data);
             if (data.length < pageSize) break;

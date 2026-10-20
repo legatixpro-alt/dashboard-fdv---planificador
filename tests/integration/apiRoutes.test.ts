@@ -305,6 +305,32 @@ describe('Integration: API Server Routes & Authentication Flow', () => {
       });
       expect(data.metasPorMes.length).toBeGreaterThan(0);
       expect(data.metaMesActual).toBeGreaterThan(0);
+      // El estado del mes en curso sale de activacion_clientes (has_<rubro>): debe haber clientes activos reales
+      expect(data.clientes.some((c: any) => c.activoMesActual)).toBe(true);
+      expect(Array.isArray(data.periodosDisponibles)).toBe(true);
+      expect(data.periodosDisponibles.length).toBeGreaterThanOrEqual(8);
     }, 20000);
+
+    it('GET /api/historial/rubro-360 respeta el filtro de meses (?meses=) sin alterar los meses disponibles', async () => {
+      const base = `${baseUrl}/api/historial/rubro-360?rubro=AZUCAR&vendedor=${encodeURIComponent('CONSOLIDATED:JUAN HERNANDEZ')}`;
+      const headers = { Authorization: `Bearer ${adminToken}` };
+      const todos = await (await fetch(base, { headers })).json();
+
+      const dos = await (await fetch(`${base}&meses=${encodeURIComponent('2026-3,2026-4')}`, { headers })).json();
+      expect(dos.meses.map((m: any) => `${m.ano}-${m.mes}`)).toEqual(['2026-3', '2026-4']);
+      expect(dos.periodosDisponibles.length).toBe(todos.periodosDisponibles.length);
+      const marzoTodos = todos.meses.find((m: any) => m.mes === 3);
+      const marzoFiltro = dos.meses.find((m: any) => m.mes === 3);
+      expect(marzoFiltro.clientesActivados).toBe(marzoTodos.clientesActivados);
+      expect(marzoFiltro.kgs).toBe(marzoTodos.kgs);
+      // Los totales del filtro son la suma exacta de los meses elegidos
+      expect(dos.resumen.totalKgsHistorico).toBeCloseTo(
+        todos.meses.filter((m: any) => m.mes === 3 || m.mes === 4).reduce((a: number, m: any) => a + m.kgs, 0), 1
+      );
+
+      const ninguno = await (await fetch(`${base}&meses=none`, { headers })).json();
+      expect(ninguno.meses).toHaveLength(0);
+      expect(ninguno.periodosDisponibles.length).toBe(todos.periodosDisponibles.length);
+    }, 30000);
   });
 });

@@ -5,7 +5,8 @@ import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
 import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2, TriangleAlert, User, LayoutList, FileText, Grip, Zap, Activity, CheckSquare, Square } from 'lucide-react';
 import { RUBROS_ACTIVACION, RUBRO_LABEL, RubroCodigo } from '../lib/rubros';
-import { RubroDashboard360, getRubroTheme } from './RubroDashboard360';
+import { Rubro360Panel } from './Rubro360Panel';
+import { getRubroTheme } from './RubroDashboard360';
 
 interface Props {
   filteredVolumen: any[];
@@ -17,13 +18,16 @@ interface Props {
 export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredActivacion, activeVendedorId, vendedorFilter }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
-  const [selectedRubro, setSelectedRubro] = useState<RubroCodigo | null>(null);
+  const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
 
   const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
-    setSelectedRubro((prev) => {
-      const next = prev === rubro ? null : rubro;
-      if (next && scrollTo) {
+    setSelectedRubros((prev) => {
+      const yaEsta = prev.includes(rubro);
+      const next = (yaEsta ? prev.filter((r) => r !== rubro) : [...prev, rubro]).sort(
+        (a, b) => RUBROS_ACTIVACION.indexOf(a as any) - RUBROS_ACTIVACION.indexOf(b as any)
+      );
+      if (!yaEsta && scrollTo) {
         setTimeout(() => {
           dashboard360Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 80);
@@ -530,7 +534,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  Detalle de Cobertura por Cliente
                </h2>
                <p className="text-[11px] font-sans text-neutral-400">
-                 Tilda cualquier rubro para desplegar su <strong>Dashboard 360° Histórico de Ventas y Activación</strong>.
+                 Tilda uno o varios rubros (selección múltiple) para desplegar su <strong>Dashboard 360° Histórico de Ventas y Activación</strong>.
                </p>
              </div>
            </div>
@@ -538,7 +542,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            {/* Barra rápida de rubros para tildar el Dashboard 360° */}
            <div className="flex flex-wrap items-center gap-1.5">
              {RUBROS_ACTIVACION.map((rCode) => {
-               const active = selectedRubro === rCode;
+               const active = selectedRubros.includes(rCode);
                const rTheme = getRubroTheme(rCode);
                const IconComp = rTheme.icon;
                return (
@@ -560,15 +564,16 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            </div>
          </div>
 
-         {selectedRubro && (
+         {selectedRubros.length > 0 && (
            <div ref={dashboard360Ref} className="p-4 border-b border-neutral-800 bg-black/50 animate-in fade-in slide-in-from-top-2 duration-300">
-             <RubroDashboard360
-               selectedRubro={selectedRubro}
-               onSelectRubro={(code) => setSelectedRubro(code)}
-               onClose={() => setSelectedRubro(null)}
+             <Rubro360Panel
+               rubrosSeleccionados={selectedRubros}
+               onToggleRubro={(code) => toggleRubro360(code)}
+               onSetRubros={setSelectedRubros}
                vendedorFilter={vendedorFilter || activeVendedorId}
                vendedorDisplayName={activeVendedorId}
                filteredVolumen={filteredVolumen}
+               showRubroBar={false}
              />
            </div>
          )}
@@ -581,19 +586,19 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                    <th className="p-3 font-bold border-r border-[#a00000] w-20 text-center">Codigo</th>
                    <th className="p-3 font-bold border-r border-[#a00000]">Razon Social</th>
                    <th onClick={() => toggleRubro360('ACEITE', true)} title="Tildar para ver Historial 360° de Aceite" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
-                     <span className="inline-flex items-center gap-1">{selectedRubro === 'ACEITE' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Aceite</span>
+                     <span className="inline-flex items-center gap-1">{selectedRubros.includes('ACEITE') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Aceite</span>
                    </th>
                    <th onClick={() => toggleRubro360('AZUCAR', true)} title="Tildar para ver Historial 360° de Azúcar" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
-                     <span className="inline-flex items-center gap-1">{selectedRubro === 'AZUCAR' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Azúcar</span>
+                     <span className="inline-flex items-center gap-1">{selectedRubros.includes('AZUCAR') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Azúcar</span>
                    </th>
                    <th onClick={() => toggleRubro360('POLLO', true)} title="Tildar para ver Historial 360° de Pollo" className="p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer hover:bg-red-800 transition-colors">
-                     <span className="inline-flex items-center gap-1">{selectedRubro === 'POLLO' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Pollo</span>
+                     <span className="inline-flex items-center gap-1">{selectedRubros.includes('POLLO') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Pollo</span>
                    </th>
                    <th onClick={() => toggleRubro360('ESTANDAR_ASTURIAS', true)} title="Tildar para ver Historial 360° de Est. y Sup. Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[120px] cursor-pointer hover:bg-red-800 transition-colors">
-                     <span className="inline-flex items-center gap-1">{selectedRubro === 'ESTANDAR_ASTURIAS' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Est. y Sup. Asturias</span>
+                     <span className="inline-flex items-center gap-1">{selectedRubros.includes('ESTANDAR_ASTURIAS') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Est. y Sup. Asturias</span>
                    </th>
                    <th onClick={() => toggleRubro360('MORTADELA_SALPICAO', true)} title="Tildar para ver Historial 360° de Mort. Salpicao y Asturias" className="p-3 font-bold text-center border-r border-[#a00000] min-w-[130px] cursor-pointer hover:bg-red-800 transition-colors">
-                     <span className="inline-flex items-center gap-1">{selectedRubro === 'MORTADELA_SALPICAO' ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Mort. Salpicao y Asturias</span>
+                     <span className="inline-flex items-center gap-1">{selectedRubros.includes('MORTADELA_SALPICAO') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Mort. Salpicao y Asturias</span>
                    </th>
                    <th className="p-3 font-bold text-center w-32">Cobertura</th>
                  </tr>

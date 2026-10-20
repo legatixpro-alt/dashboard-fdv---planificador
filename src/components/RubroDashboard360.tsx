@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -7,8 +7,9 @@ import {
   BarChart3,
   Calendar,
   CheckCircle2,
-  CheckSquare,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   DollarSign,
   Droplets,
   Drumstick,
@@ -18,7 +19,6 @@ import {
   RefreshCw,
   Search,
   Sparkles,
-  Square,
   Target,
   TrendingUp,
   UserCheck,
@@ -28,23 +28,25 @@ import {
 import {
   MESES_CORTO,
   MESES_LARGO,
-  RUBROS_ACTIVACION,
   RUBRO_LABEL,
   RubroCodigo,
   clasificarRubro
 } from '../lib/rubros';
-import {
-  EstadoClienteRubro360,
-  Rubro360Data,
-  fetchHistRubro360
-} from '../services/historialService';
+import { EstadoClienteRubro360, Rubro360Data } from '../services/historialService';
 import { VolumenData } from '../types';
+
+export interface Rubro360State {
+  data: Rubro360Data | null;
+  loading: boolean;
+  error: string | null;
+}
 
 interface Props {
   selectedRubro: RubroCodigo;
-  onSelectRubro: (rubro: RubroCodigo) => void;
+  /** Datos ya consultados por el contenedor (respetan el filtro de fechas aplicado). */
+  state: Rubro360State;
+  onReload: () => void;
   onClose: () => void;
-  vendedorFilter: string;
   vendedorDisplayName: string;
   currentStats?: {
     meta: number;
@@ -54,6 +56,11 @@ interface Props {
     estCierre: number;
   };
   filteredVolumen?: VolumenData[];
+  /** false cuando el filtro de fechas excluye el mes en curso. */
+  showActual?: boolean;
+  /** true si hay un filtro de meses aplicado. */
+  filtroActivo?: boolean;
+  defaultCollapsed?: boolean;
 }
 
 type SubTab360 = 'evolucion' | 'productos' | 'clientes';
@@ -119,45 +126,24 @@ export const getRubroTheme = (rubro: RubroCodigo) => {
 
 export const RubroDashboard360: React.FC<Props> = ({
   selectedRubro,
-  onSelectRubro,
+  state,
+  onReload,
   onClose,
-  vendedorFilter,
   vendedorDisplayName,
   currentStats,
-  filteredVolumen = []
+  filteredVolumen = [],
+  showActual = true,
+  filtroActivo = false,
+  defaultCollapsed = false
 }) => {
-  const [data, setData] = useState<Rubro360Data | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error } = state;
+  const [collapsed, setCollapsed] = useState<boolean>(defaultCollapsed);
 
   const [subTab, setSubTab] = useState<SubTab360>('evolucion');
   const [chartMetric, setChartMetric] = useState<ChartMetric>('clientes');
   const [skuMetric, setSkuMetric] = useState<SkuMetric>('cajas');
   const [clientFilter, setClientFilter] = useState<ClientFilter>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [reloadTick, setReloadTick] = useState<number>(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetchHistRubro360(selectedRubro, vendedorFilter)
-      .then((res) => {
-        if (!cancelled) {
-          setData(res);
-          setLoading(false);
-        }
-      })
-      .catch((e: any) => {
-        if (!cancelled) {
-          setError(e?.message || 'Error consultando el historial del rubro');
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRubro, vendedorFilter, reloadTick]);
 
   const theme = getRubroTheme(selectedRubro);
   const RubroIcon = theme.icon;
@@ -217,7 +203,7 @@ export const RubroDashboard360: React.FC<Props> = ({
       };
     });
 
-    if (chartMetric === 'clientes' || chartMetric === 'kgs') {
+    if (showActual && (chartMetric === 'clientes' || chartMetric === 'kgs')) {
       const currVal = chartMetric === 'clientes' ? activadosActual : currentMonthVolumenBySku.totalKgActual;
       const lastHist = data.meses.length > 0 ? data.meses[data.meses.length - 1] : null;
       const prevVal = lastHist ? (chartMetric === 'clientes' ? lastHist.clientesActivados : lastHist.kgs) : 0;
@@ -233,7 +219,7 @@ export const RubroDashboard360: React.FC<Props> = ({
       });
     }
     return pts;
-  }, [data, chartMetric, activadosActual, metaActual, pctActualCartera, currentMonthVolumenBySku.totalKgActual]);
+  }, [data, chartMetric, showActual, activadosActual, metaActual, pctActualCartera, currentMonthVolumenBySku.totalKgActual]);
 
   const maxChartVal = useMemo(() => {
     const m = Math.max(1, ...chartPoints.map((p) => p.value));
@@ -264,7 +250,7 @@ export const RubroDashboard360: React.FC<Props> = ({
         case 'ACTIVOS_ACTUAL':
           return c.activoMesActual;
         case 'HABITUALES':
-          return c.mesesActivados >= 3;
+          return c.mesesActivados >= umbralHabitual;
         case 'SIN_HISTORIAL':
           return c.estado360 === 'SIN_HISTORIAL';
         default:
@@ -308,6 +294,8 @@ export const RubroDashboard360: React.FC<Props> = ({
     }
   };
 
+  // Cliente "habitual" = compró en al menos 3 meses (o en todos los meses visibles si el filtro muestra menos de 3)
+  const umbralHabitual = Math.max(1, Math.min(3, data ? data.meses.length : 3));
   const diffVsPromedio = data ? +(activadosActual - data.resumen.promedioClientesMes).toFixed(1) : 0;
 
   return (
@@ -344,7 +332,7 @@ export const RubroDashboard360: React.FC<Props> = ({
 
           <div className="flex items-center gap-2 self-end lg:self-center shrink-0">
             <button
-              onClick={() => setReloadTick((t) => t + 1)}
+              onClick={() => onReload()}
               title="Actualizar datos históricos"
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 text-xs font-sans font-bold transition-colors"
             >
@@ -352,49 +340,27 @@ export const RubroDashboard360: React.FC<Props> = ({
               <span className="hidden sm:inline">Sincronizar</span>
             </button>
             <button
+              onClick={() => setCollapsed((c) => !c)}
+              title={collapsed ? 'Expandir' : 'Contraer'}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 text-xs font-sans font-bold transition-colors"
+            >
+              {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+              <span className="hidden sm:inline">{collapsed ? 'Expandir' : 'Contraer'}</span>
+            </button>
+            <button
               onClick={onClose}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-red-950/60 text-neutral-300 hover:text-red-300 border border-neutral-800 hover:border-red-800/60 text-xs font-sans font-bold transition-colors"
             >
               <X className="w-4 h-4" />
-              <span>Cerrar 360°</span>
+              <span>Quitar</span>
             </button>
           </div>
         </div>
 
-        {/* BARRA DE RUBROS PARA TILDAR DIRECTAMENTE */}
-        <div className="mt-4 pt-3 border-t border-neutral-800/70 flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-sans font-bold uppercase tracking-wider text-neutral-400 mr-1">
-            Rubro tildado:
-          </span>
-          {RUBROS_ACTIVACION.map((rCode) => {
-            const active = rCode === selectedRubro;
-            const rTheme = getRubroTheme(rCode);
-            const IconComp = rTheme.icon;
-            return (
-              <button
-                key={rCode}
-                onClick={() => onSelectRubro(rCode)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-sans font-bold border transition-all cursor-pointer ${
-                  active
-                    ? `${rTheme.badgeCls} shadow-md ring-1 ring-white/10`
-                    : 'bg-neutral-900/70 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                }`}
-              >
-                {active ? (
-                  <CheckSquare className="w-3.5 h-3.5 shrink-0" />
-                ) : (
-                  <Square className="w-3.5 h-3.5 shrink-0 opacity-60" />
-                )}
-                <IconComp className="w-3.5 h-3.5 shrink-0" />
-                <span>{RUBRO_LABEL[rCode]}</span>
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       {/* ESTADO DE CARGA / ERROR */}
-      {loading && (
+      {!collapsed && loading && (
         <div className="p-12 flex flex-col items-center justify-center gap-3 text-neutral-400">
           <div className="w-8 h-8 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin" />
           <span className="text-xs font-sans font-bold uppercase tracking-wider">
@@ -403,14 +369,14 @@ export const RubroDashboard360: React.FC<Props> = ({
         </div>
       )}
 
-      {!loading && error && (
+      {!collapsed && !loading && error && (
         <div className="p-6 m-4 rounded-xl bg-red-950/30 border border-red-900/50 text-red-200 text-xs flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
             <span>{error}</span>
           </div>
           <button
-            onClick={() => setReloadTick((t) => t + 1)}
+            onClick={() => onReload()}
             className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500 shrink-0"
           >
             Reintentar
@@ -418,7 +384,7 @@ export const RubroDashboard360: React.FC<Props> = ({
         </div>
       )}
 
-      {!loading && !error && data && (
+      {!collapsed && !loading && !error && data && (
         <div className="p-4 md:p-6 space-y-6">
           {/* FILA 1: 5 TARJETAS KPI EJECUTIVAS 360° */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -437,7 +403,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                   </span>
                 </div>
                 <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono">
-                  <span className="text-neutral-400">Prom. Ene–Ago:</span>
+                  <span className="text-neutral-400">Prom. {data.resumen.totalMeses} {data.resumen.totalMeses === 1 ? "mes" : "meses"}:</span>
                   <strong className="text-white">{fmtDec(data.resumen.promedioClientesMes, 1)} cli/mes</strong>
                 </div>
               </div>
@@ -635,7 +601,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                       Curva Histórica Mensual — {RUBRO_LABEL[selectedRubro]}
                     </h3>
                     <p className="text-[11px] text-neutral-400 mt-0.5">
-                      Comportamiento real mes a mes desde Enero 2026 hasta el avance del mes actual.
+                      {filtroActivo ? 'Comportamiento real de los meses seleccionados en el filtro de fechas.' : 'Comportamiento real mes a mes de todo el historial disponible, más el avance del mes actual.'}
                     </p>
                   </div>
                   <div className="flex bg-neutral-900 p-1 rounded-lg border border-neutral-800 self-start sm:self-auto">
@@ -833,6 +799,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                       })}
 
                       {/* FILA DESTACADA: AVANCE DEL MES ACTUAL */}
+                      {showActual && (
                       <tr className="bg-red-950/20 border-t-2 border-red-800/60">
                         <td className="p-3 font-sans font-extrabold text-amber-400 flex items-center gap-2">
                           <Target className="w-3.5 h-3.5 text-red-500 shrink-0" />
@@ -873,6 +840,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                         </td>
                         <td className="p-3 text-center text-neutral-300">{currentMonthVolumenBySku.bySku.size}</td>
                       </tr>
+                      )}
                     </tbody>
                     <tfoot>
                       <tr className="bg-neutral-900/90 border-t border-neutral-800 font-mono font-bold text-xs">
@@ -962,8 +930,8 @@ export const RubroDashboard360: React.FC<Props> = ({
                           {MESES_CORTO[p.mes]}
                         </th>
                       ))}
-                      <th className="p-3 text-right text-amber-400 bg-neutral-900">Total Hist.</th>
-                      <th className="p-3 text-right text-emerald-400 bg-emerald-950/20">Mes Actual (KG)</th>
+                      <th className="p-3 text-right text-amber-400 bg-neutral-900">{filtroActivo ? 'Total (meses filtrados)' : 'Total Hist.'}</th>
+                      {showActual && <th className="p-3 text-right text-emerald-400 bg-emerald-950/20">Mes Actual (KG)</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800/70 font-mono">
@@ -1012,9 +980,11 @@ export const RubroDashboard360: React.FC<Props> = ({
                               );
                             })}
                             <td className="p-3 text-right font-bold text-amber-400 bg-neutral-900/40">{totalVal}</td>
-                            <td className="p-3 text-right font-bold text-emerald-400 bg-emerald-950/10">
-                              {currentSkuKg > 0 ? `${fmtDec(currentSkuKg, 1)} kg` : '—'}
-                            </td>
+                            {showActual && (
+                              <td className="p-3 text-right font-bold text-emerald-400 bg-emerald-950/10">
+                                {currentSkuKg > 0 ? `${fmtDec(currentSkuKg, 1)} kg` : '—'}
+                              </td>
+                            )}
                           </tr>
                         );
                       })
@@ -1043,7 +1013,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                       'ACTIVOS_ACTUAL',
                       `Activados este Mes (${data.resumen.reactivadosEsteMes + data.resumen.nuevosEsteMes})`
                     ],
-                    ['HABITUALES', `Habituales ≥3 Meses (${data.resumen.clientesHabituales})`],
+                    ['HABITUALES', `Habituales ≥${umbralHabitual} ${umbralHabitual === 1 ? 'Mes' : 'Meses'} (${data.resumen.clientesHabituales})`],
                     ['SIN_HISTORIAL', 'Sin Historial en el Rubro']
                   ] as [ClientFilter, string][]
                 ).map(([fKey, fLabel]) => (
@@ -1089,9 +1059,9 @@ export const RubroDashboard360: React.FC<Props> = ({
                             {MESES_CORTO[p.mes]}
                           </th>
                         ))}
-                        <th className="p-3 text-center bg-neutral-950 text-amber-400">Mes Actual</th>
-                        <th className="p-3 text-right">Cajas Hist.</th>
-                        <th className="p-3 text-right">KG Hist.</th>
+                        {showActual && <th className="p-3 text-center bg-neutral-950 text-amber-400">Mes Actual</th>}
+                        <th className="p-3 text-right">{filtroActivo ? 'Cajas (filtro)' : 'Cajas Hist.'}</th>
+                        <th className="p-3 text-right">{filtroActivo ? 'KG (filtro)' : 'KG Hist.'}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-800/70 font-mono">
@@ -1142,6 +1112,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                                 </td>
                               );
                             })}
+                            {showActual && (
                             <td className="p-3 text-center bg-neutral-950/60">
                               {c.activoMesActual ? (
                                 <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-700/50 text-emerald-400 text-[10px] font-sans font-bold">
@@ -1153,6 +1124,7 @@ export const RubroDashboard360: React.FC<Props> = ({
                                 </span>
                               )}
                             </td>
+                            )}
                             <td className="p-3 text-right font-bold text-white">{fmtDec(c.totalCajas, 1)}</td>
                             <td className="p-3 text-right text-neutral-300">{fmtDec(c.totalKgs, 1)}</td>
                           </tr>

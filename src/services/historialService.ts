@@ -87,7 +87,10 @@ export interface Rubro360Cliente {
 
 export interface Rubro360Data {
   rubro: RubroCodigo;
+  /** Meses visibles según el filtro aplicado. */
   periodos: HistPeriodo[];
+  /** Todos los meses con historial (para armar el filtro de fechas). */
+  periodosDisponibles: HistPeriodo[];
   carteraTotal: number;
   activadosMesActual: number;
   metaMesActual: number;
@@ -147,5 +150,7 @@ export const fetchHistClientes = (ano: number, mes: number, vendedor?: string) =
   getJSON<{ rows: HistClienteRow[] }>(`/api/historial/clientes?ano=${ano}&mes=${mes}&${v(vendedor)}`);
 export const fetchHistCliente = (id: string, vendedor?: string) =>
   getJSON<HistClienteDetalle>(`/api/historial/cliente/${encodeURIComponent(id)}?${v(vendedor)}`);
-export const fetchHistRubro360 = (rubro: RubroCodigo, vendedor?: string) =>
-  getJSON<Rubro360Data>(`/api/historial/rubro-360?rubro=${encodeURIComponent(rubro)}&${v(vendedor)}`);
+export const fetchHistRubro360 = (rubro: RubroCodigo, vendedor?: string, meses: string[] = []) =>
+  getJSON<Rubro360Data>(
+    `/api/historial/rubro-360?rubro=${encodeURIComponent(rubro)}&${v(vendedor)}${meses.length ? `&meses=${encodeURIComponent(meses.join(','))}` : ''}`
+  );

@@ -57,7 +57,13 @@ function num(s) {
 }
 const clean = (s) => String(s).replace(/\s+/g, ' ').trim();
 
-const text = new TextDecoder('windows-1252').decode(fs.readFileSync(FILE));
+// El CSV exportado es UTF-8: se decodifica como UTF-8 y solo si no es válido se usa windows-1252.
+// (Decodificar siempre como windows-1252 dejaba nombres como "PIÃ‘A" / "BRICEÃ‘O" en la base.)
+const buf = fs.readFileSync(FILE);
+let text;
+try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+catch { text = new TextDecoder('windows-1252').decode(buf); }
+text = text.replace(/^\uFEFF/, '');
 const lines = text.split(/\r?\n/);
 const agg = new Map();
 const tot = { lineas: 0, kgs: 0, monto: 0, cajas: 0 };
@@ -80,7 +86,9 @@ for (let i = 1; i < lines.length; i++) {
   if (!r) {
     const nombre = clean(f[10]);
     r = { ano, mes, id_cliente: idCliente, cliente: clean(f[6]), id_vendedor: idVend, vendedor: clean(f[8]),
-          id_articulo: sku, articulo: nombre, rubro: rubro(sku, nombre), cajas: 0, unidades: 0, kgs: 0, monto: 0 };
+          id_articulo: sku, articulo: nombre,
+          // El CSV trae el código con ceros ("001464"); las reglas por SKU usan el código sin ceros ("1464").
+          rubro: rubro(sku.replace(/^0+(?=\d)/, ''), nombre), cajas: 0, unidades: 0, kgs: 0, monto: 0 };
     agg.set(key, r);
   }
   r.cajas += cajas; r.unidades += unidades; r.kgs += kgs; r.monto += monto;

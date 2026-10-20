@@ -778,6 +778,7 @@ export default function App() {
               <VolumenTab 
                 filteredVolumen={filteredVolumen} 
                 activeVendedorId={activeVendedorDisplayName}
+                vendedorFilter={activeVendedorId}
               />
             )}
             {activeTab === 'ACTIVACION_CLIENTES' && (
