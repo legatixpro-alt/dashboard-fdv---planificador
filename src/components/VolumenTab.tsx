@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import React, { useEffect, useMemo, useState } from 'react';
-import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User, CheckSquare, Square, Activity } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User, CheckSquare, Square } from 'lucide-react';
 import { VolumenData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
 import { MESES_CORTO } from '../lib/rubros';
@@ -29,15 +29,6 @@ interface SkuStats {
   /** true cuando la fila del Sheet no tiene un criterio confiable para cruzarla con el historial. */
   sinHist?: boolean;
 }
-
-const CATEGORIAS_RAPIDAS: { cat: string; label: string }[] = [
-  { cat: 'ACEITE', label: 'Aceite' },
-  { cat: 'AZÚCAR', label: 'Azúcar' },
-  { cat: 'POLLO', label: 'Pollo' },
-  { cat: 'ESTANDAR Y SUPERIOR ASTURIAS', label: 'Est. y Sup. Asturias' },
-  { cat: 'MORTADELA SALPICAO Y ASTURIAS', label: 'Mort. Salpicao y Asturias' },
-  { cat: 'OTROS', label: 'Otros' }
-];
 
 export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId, vendedorFilter }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -220,15 +211,17 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
     .map((p) => `${MESES_CORTO[p.mes]} ${String(p.ano).slice(-2)}`)
     .join(', ');
 
+  // Al tocar un producto del cuadro detallado se agrega/quita del Dashboard 360°.
+  // Solo se desplaza hacia el dashboard al abrirlo (primer producto), para no interrumpir la selección múltiple.
+  const dashboardRef = useRef<HTMLDivElement | null>(null);
   const toggleCode = (code: string) =>
-    setSelectedCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
-  const toggleCategoria = (cat: string) => {
-    const codes = skuStats.filter((st) => (st.categoria || 'OTROS') === cat).map((st) => st.skuId);
-    if (codes.length === 0) return;
-    setSelectedCodes((prev) =>
-      codes.every((c) => prev.includes(c)) ? prev.filter((c) => !codes.includes(c)) : Array.from(new Set([...prev, ...codes]))
-    );
-  };
+    setSelectedCodes((prev) => {
+      if (prev.includes(code)) return prev.filter((c) => c !== code);
+      if (prev.length === 0) {
+        setTimeout(() => dashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      }
+      return [...prev, code];
+    });
   const itemsSel = selectedCodes
     .map((code) => skuStats.find((st) => st.skuId === code))
     .filter((st): st is SkuStats => !!st)
@@ -368,55 +361,29 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
 
       </div>
 
-      {/* FILTRO DE FECHAS + SELECCIÓN MÚLTIPLE PARA EL DASHBOARD 360° */}
+      {/* FILTRO DE FECHAS */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-4 space-y-3">
         <MonthFilter periodos={periodosHist} selected={mesesSel} onChange={setMesesSel} incluirActual />
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center gap-1.5 text-[10px] font-sans font-bold uppercase tracking-wider text-neutral-400 mr-1">
-            <Activity className="w-3.5 h-3.5 text-red-500" /> Tildar por rubro (selección múltiple):
-          </span>
-          {CATEGORIAS_RAPIDAS.map(({ cat, label }) => {
-            const codes = skuStats.filter((st) => (st.categoria || 'OTROS') === cat).map((st) => st.skuId);
-            if (codes.length === 0) return null;
-            const activo = codes.every((c) => selectedCodes.includes(c));
-            return (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => toggleCategoria(cat)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-sans font-bold border transition-all ${
-                  activo ? 'bg-red-600 text-white border-red-500' : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:text-white hover:border-neutral-600'
-                }`}
-              >
-                {activo ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5 opacity-60" />}
-                {label} ({codes.length})
-              </button>
-            );
-          })}
-          {selectedCodes.length > 0 && (
-            <button type="button" onClick={() => setSelectedCodes([])} className="px-2 py-1 text-[11px] font-sans text-neutral-500 hover:text-white">
-              Quitar selección ({selectedCodes.length})
-            </button>
-          )}
-        </div>
         <p className="text-[10px] font-sans text-neutral-500">
-          Tilda uno o varios productos en la tabla para abrir su Dashboard 360° con el volumen real de meses anteriores.
+          Toca uno o varios productos en el cuadro detallado para abrir su Dashboard 360° con el volumen real de meses anteriores.
           {histLoading && ' Cargando historial de ventas…'}
           {histError && <span className="text-amber-400"> {histError}</span>}
         </p>
       </div>
 
       {selectedCodes.length > 0 && (
-        <VolumenDashboard360
-          items={itemsSel}
-          periodos={periodosHist}
-          mesesSel={mesesSel}
-          loading={histLoading}
-          error={histError}
-          vendedorDisplayName={activeVendedorId}
-          onToggle={toggleCode}
-          onClear={() => setSelectedCodes([])}
-        />
+        <div ref={dashboardRef} className="scroll-mt-4">
+          <VolumenDashboard360
+            items={itemsSel}
+            periodos={periodosHist}
+            mesesSel={mesesSel}
+            loading={histLoading}
+            error={histError}
+            vendedorDisplayName={activeVendedorId}
+            onToggle={toggleCode}
+            onClear={() => setSelectedCodes([])}
+          />
+        </div>
       )}
 
       {/* SECTION 2: VOLUMEN POR SKU (Hybrid Layout) */}
@@ -495,9 +462,13 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
             </div>
             <div className="text-right pl-4 sm:pl-6">
               <div className="text-[9px] font-sans text-neutral-500 uppercase tracking-wider mb-1">Avance</div>
+              {useHist ? (
+                <div className="px-2 py-0.5 text-[10px] md:text-xs font-mono font-bold text-neutral-500" title="No hay cuota guardada de meses anteriores">—</div>
+              ) : (
               <div className={`px-2 py-0.5 rounded border text-[10px] md:text-xs font-mono font-bold ${cumplimiento >= 100 ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-red-900/50 bg-red-950/40 text-red-400'}`}>
                 {(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(1)}%
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -521,18 +492,19 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
                 const isSuccess = stat.cumplimiento >= 100;
                 // Alternate row background slightly for readability
                 const bgClass = idx % 2 === 0 ? 'bg-transparent' : 'bg-neutral-900/20';
+                const isSelected = selectedCodes.includes(stat.skuId);
                 
                 return (
-                  <tr key={`${stat.skuId}-${idx}`} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
+                  <tr
+                    key={`${stat.skuId}-${idx}`}
+                    onClick={() => toggleCode(stat.skuId)}
+                    title={isSelected ? 'Quitar del Dashboard 360°' : 'Ver Dashboard 360° de volumen'}
+                    className={`${isSelected ? 'bg-red-950/30 hover:bg-red-950/40' : `${bgClass} hover:bg-neutral-900/50`} border-b border-neutral-800/50 transition-colors cursor-pointer`}
+                  >
                     <td className="p-3 border-r border-neutral-800/50 text-center">
-                      <button
-                        type="button"
-                        onClick={() => toggleCode(stat.skuId)}
-                        title="Ver Dashboard 360° de volumen"
-                        className="inline-flex items-center justify-center text-neutral-500 hover:text-white"
-                      >
-                        {selectedCodes.includes(stat.skuId) ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
-                      </button>
+                      <span className="inline-flex items-center justify-center text-neutral-500">
+                        {isSelected ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
+                      </span>
                     </td>
                     <td className="p-3 border-r border-neutral-800/50 text-red-500 font-bold">{stat.skuId}</td>
                     <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase">{stat.articulo}</td>
@@ -575,12 +547,18 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
            {filteredSkuStats.map((stat, idx) => {
                const isSuccess = stat.cumplimiento >= 100;
                return (
-                   <div key={`${stat.skuId}-${idx}`} className="bg-neutral-900 border border-neutral-800 rounded-lg p-3">
+                   <div
+                       key={`${stat.skuId}-${idx}`}
+                       onClick={() => toggleCode(stat.skuId)}
+                       className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                         selectedCodes.includes(stat.skuId) ? 'bg-red-950/30 border-red-700/60' : 'bg-neutral-900 border-neutral-800 hover:border-neutral-600'
+                       }`}
+                   >
                        <div className="flex justify-between items-center mb-2">
-                                                       <span className="flex items-center gap-2">
-                              <button type="button" onClick={() => toggleCode(stat.skuId)} title="Ver Dashboard 360° de volumen" className="text-neutral-500 hover:text-white">
+                            <span className="flex items-center gap-2">
+                              <span className="text-neutral-500">
                                 {selectedCodes.includes(stat.skuId) ? <CheckSquare className="w-4 h-4 text-red-500" /> : <Square className="w-4 h-4" />}
-                              </button>
+                              </span>
                               <span className="text-red-500 font-mono text-xs font-bold">{stat.skuId}</span>
                             </span>
                             {stat.sinCuota ? (
