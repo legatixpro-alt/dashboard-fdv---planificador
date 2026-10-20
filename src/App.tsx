@@ -361,7 +361,7 @@ export default function App() {
       Object.values(SUPERVISOR_PROFILES).forEach(sup => {
         adminOptions.push({
           value: `SUPERVISOR:${sup.canonicalUsername}`,
-          label: `👥 Supervisor: ${sup.displayName} (Zona Falcón / Paraguaná - ${sup.supervisedVendors.length} vendedores)`
+          label: `👥 Supervisor: ${sup.displayName} (Ángel Navarro, Mariangel González, Víctor Campos)`
         });
       });
 

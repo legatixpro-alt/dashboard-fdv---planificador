@@ -292,7 +292,7 @@ VENDOR_PROFILES['JONATHAN'] = mikelProfile;
 VENDOR_PROFILES['JHONATAN'] = mikelProfile;
 VENDOR_PROFILES['JAIDER MEDINA'] = VENDOR_PROFILES['JAIDER MEDINA - FOOD SERVICE NORTE'];
 
-// Perfiles de Supervisores (Alí Pérez ya NO es vendedor, sino únicamente Supervisor)
+// Perfiles de Supervisores (Alí Pérez ya NO es vendedor, sino únicamente Supervisor de los 3 vendedores de su antigua ruta)
 export const SUPERVISOR_PROFILES: Record<string, SupervisorProfile> = {
   'ALI PEREZ': {
     canonicalUsername: 'ALI PEREZ',
@@ -300,11 +300,7 @@ export const SUPERVISOR_PROFILES: Record<string, SupervisorProfile> = {
     supervisedVendors: [
       'ANGEL NAVARRO',
       'MARIANGEL GONZALEZ',
-      'VICTOR CAMPOS',
-      'ELISA SOLER',
-      'LEONARDO RIOS',
-      'LUIS GUANIPA',
-      'OSCAR ORTIZ'
+      'VICTOR CAMPOS'
     ]
   }
 };

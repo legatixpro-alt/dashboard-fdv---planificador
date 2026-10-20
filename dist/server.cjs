@@ -335,11 +335,7 @@ var SUPERVISOR_PROFILES = {
     supervisedVendors: [
       "ANGEL NAVARRO",
       "MARIANGEL GONZALEZ",
-      "VICTOR CAMPOS",
-      "ELISA SOLER",
-      "LEONARDO RIOS",
-      "LUIS GUANIPA",
-      "OSCAR ORTIZ"
+      "VICTOR CAMPOS"
     ]
   }
 };
@@ -586,8 +582,8 @@ async function startServer() {
     "ELISA SOLER": { password: "12330043", role: "VENDEDOR", vendorId: "28" },
     "ALI PEREZ": { password: "19117934", role: "SUPERVISOR", vendorId: "SUPERVISOR_ALI_PEREZ" },
     "ANGEL NAVARRO": { password: "19117934", role: "VENDEDOR", vendorId: "29" },
-    "MARIANGEL GONZALEZ": { password: "19117934", role: "VENDEDOR", vendorId: "47" },
-    "VICTOR CAMPOS": { password: "19117934", role: "VENDEDOR", vendorId: "48" },
+    "MARIANGEL GONZALEZ": { password: "20552780", role: "VENDEDOR", vendorId: "47" },
+    "VICTOR CAMPOS": { password: "19944329", role: "VENDEDOR", vendorId: "48" },
     "J PABLO ARAUJO": { password: "15239697", role: "VENDEDOR", vendorId: "31" },
     "EDUARDO PI\xD1A": { password: "11878063", role: "VENDEDOR", vendorId: "33" },
     "JOHNATAN SOTO VILLA DEL ROS": { password: "18395226", role: "VENDEDOR", vendorId: "37" },

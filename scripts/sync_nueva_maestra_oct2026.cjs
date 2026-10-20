@@ -283,8 +283,8 @@ async function main() {
 
   const nuevosUsuarios = [
     { username: 'ANGEL NAVARRO', password_hash: '19117934', role: 'VENDEDOR', vendor_id: '29', nombre_completo: 'ANGEL NAVARRO', activo: true },
-    { username: 'MARIANGEL GONZALEZ', password_hash: '19117934', role: 'VENDEDOR', vendor_id: '47', nombre_completo: 'MARIANGEL GONZALEZ', activo: true },
-    { username: 'VICTOR CAMPOS', password_hash: '19117934', role: 'VENDEDOR', vendor_id: '48', nombre_completo: 'VICTOR CAMPOS', activo: true },
+    { username: 'MARIANGEL GONZALEZ', password_hash: '20552780', role: 'VENDEDOR', vendor_id: '47', nombre_completo: 'MARIANGEL GONZALEZ', activo: true },
+    { username: 'VICTOR CAMPOS', password_hash: '19944329', role: 'VENDEDOR', vendor_id: '48', nombre_completo: 'VICTOR CAMPOS', activo: true },
   ];
   for (const u of nuevosUsuarios) {
     const { data: existing } = await supabase.from('usuarios').select('id').eq('username', u.username).maybeSingle();
