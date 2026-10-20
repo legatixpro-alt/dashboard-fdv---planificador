@@ -34,16 +34,9 @@ import { Degustacion } from './types';
 type TabId = 'ACTIVACION_RUBRO' | 'VOLUMEN' | 'ACTIVACION_CLIENTES' | 'COBROS_OCR' | 'DEGUSTACIONES' | 'ALKOSTO' | 'TRAZABILIDAD';
 
 export default function App() {
-  const [userRole, setUserRole] = useState<Role>(() => {
-    const saved = localStorage.getItem('dashboard_fdv_role') as Role;
-    return (saved === 'ADMIN' || saved === 'SUPERVISOR') ? saved : 'VENDEDOR';
-  });
-  const [loggedInVendor, setLoggedInVendor] = useState<string>(() => {
-    return localStorage.getItem('dashboard_fdv_vendor') || '';
-  });
-  const [activeVendedorId, setActiveVendedorId] = useState<string>(() => {
-    return localStorage.getItem('dashboard_fdv_active_route') || '';
-  });
+  const [userRole, setUserRole] = useState<Role>('VENDEDOR');
+  const [loggedInVendor, setLoggedInVendor] = useState<string>('');
+  const [activeVendedorId, setActiveVendedorId] = useState<string>('');
 
   const [activeTab, setActiveTab] = useState<TabId>('ACTIVACION_RUBRO');
   const [isTabDropdownOpen, setIsTabDropdownOpen] = useState(false);
@@ -56,8 +49,10 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [authUsuario, setAuthUsuario] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return Boolean(localStorage.getItem('dashboard_fdv_token')) && localStorage.getItem('dashboard_fdv_logged_in') === 'true';
+  // Siempre iniciar en la pantalla de Login al abrir la aplicación para que cada usuario ingrese con sus credenciales
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    clearAuthSession();
+    return false;
   });
   const [loginError, setLoginError] = useState('');
 
@@ -581,7 +576,7 @@ export default function App() {
               />
             </div>
             <h1 className="text-3xl font-sans font-bold text-white mb-2 tracking-tight">Dashboard <span className="text-red-500">FDV</span></h1>
-            <p className="text-neutral-500 font-sans text-sm">Ingresa con tu usuario de vendedor</p>
+            <p className="text-neutral-500 font-sans text-sm">Ingresa con tu usuario y contraseña</p>
           </div>
 
           {loginError && (
@@ -591,7 +586,7 @@ export default function App() {
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleLogin} autoComplete="off" className="space-y-5">
             <div>
               <label className="block text-xs font-sans font-bold text-neutral-400 uppercase tracking-wider mb-2">
                 Usuario
@@ -603,6 +598,8 @@ export default function App() {
                 <input
                   type="text"
                   required
+                  autoFocus
+                  autoComplete="off"
                   value={authUsuario}
                   onChange={(e) => setAuthUsuario(e.target.value)}
                   className="block w-full pl-10 pr-3 py-3 border border-neutral-800 rounded-lg bg-neutral-900 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 transition-colors font-sans text-sm uppercase"
@@ -622,6 +619,7 @@ export default function App() {
                 <input
                   type="password"
                   required
+                  autoComplete="new-password"
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
                   className="block w-full pl-10 pr-3 py-3 border border-neutral-800 rounded-lg bg-neutral-900 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 transition-colors font-sans text-sm"
