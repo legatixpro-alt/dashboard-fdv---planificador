@@ -78,16 +78,41 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
   };
 
   const categoriaStats: CategoriaStats[] = useMemo(() => {
+    let manualMap: Record<string, any> = {};
+    try {
+      const raw = localStorage.getItem('fdv_manual_rubros_v1');
+      if (raw) manualMap = JSON.parse(raw) || {};
+    } catch {}
+
     const countClientActivations = (cat: string) => {
       if (!filteredActivacion || filteredActivacion.length === 0) return 0;
-      switch (cat) {
-        case 'ACEITE': return filteredActivacion.filter(a => a.cats?.ACEITE).length;
-        case 'AZÚCAR': return filteredActivacion.filter(a => a.cats?.AZUCAR).length;
-        case 'POLLO': return filteredActivacion.filter(a => a.cats?.POLLO).length;
-        case 'ESTANDAR Y SUPERIOR ASTURIAS': return filteredActivacion.filter(a => a.cats?.ESTANDAR_ASTURIAS).length;
-        case 'MORTADELA SALPICAO Y ASTURIAS': return filteredActivacion.filter(a => a.cats?.MORTADELA_SALPICAO).length;
-        default: return 0;
+      const activeSet = new Set<string>();
+      for (const a of filteredActivacion) {
+        const key = a.id ? String(a.id).replace(/^[#\s]+/, '').trim() : String(a.cliente || '').trim();
+        if (!key) continue;
+        const ov = manualMap[key];
+        let isActive = false;
+        switch (cat) {
+          case 'ACEITE':
+            isActive = ov?.ACEITE !== undefined ? Boolean(ov.ACEITE) : Boolean(a.cats?.ACEITE || (Number(a.cajas?.ACEITE) || 0) > 0);
+            break;
+          case 'AZÚCAR':
+            isActive = ov?.AZUCAR !== undefined ? Boolean(ov.AZUCAR) : Boolean(a.cats?.AZUCAR || a.cats?.AZÚCAR || (Number(a.cajas?.AZUCAR) || 0) > 0);
+            break;
+          case 'POLLO':
+            isActive = ov?.POLLO !== undefined ? Boolean(ov.POLLO) : Boolean(a.cats?.POLLO || a.cats?.ARROZ || (Number(a.cajas?.POLLO) || 0) > 0);
+            break;
+          case 'ESTANDAR Y SUPERIOR ASTURIAS':
+            isActive = ov?.ESTANDAR_ASTURIAS !== undefined ? Boolean(ov.ESTANDAR_ASTURIAS) : Boolean(a.cats?.ESTANDAR_ASTURIAS || a.cats?.ENTERO || (Number(a.cajas?.ESTANDAR_ASTURIAS) || 0) > 0);
+            break;
+          case 'MORTADELA SALPICAO Y ASTURIAS':
+            isActive = ov?.MORTADELA_SALPICAO !== undefined ? Boolean(ov.MORTADELA_SALPICAO) : Boolean(a.cats?.MORTADELA_SALPICAO || a.cats?.LIGEROS || (Number(a.cajas?.MORTADELA_SALPICAO) || 0) > 0);
+            break;
+        }
+        if (isActive) activeSet.add(key);
+        else if (ov) activeSet.delete(key);
       }
+      return activeSet.size;
     };
 
     if (metasActivacion && metasActivacion.length > 0) {

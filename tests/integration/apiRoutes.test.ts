@@ -10,10 +10,10 @@ describe('Integration: API Server Routes & Authentication Flow', () => {
   beforeAll(async () => {
     // Dynamically locate the running server (port 3005 fallback to 3000)
     let found = false;
-    for (const port of [3005, 3000]) {
+    for (const port of [3005]) {
       try {
-        const res = await fetch(`http://localhost:${port}/api/health`);
-        if (res.ok) {
+        const res = await fetch(`http://localhost:${port}/api/cadenas/sucursales`);
+        if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
           baseUrl = `http://localhost:${port}`;
           found = true;
           break;

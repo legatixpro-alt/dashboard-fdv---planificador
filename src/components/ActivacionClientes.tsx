@@ -7,6 +7,22 @@ import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2
 import { RUBROS_ACTIVACION, RUBRO_LABEL, RubroCodigo } from '../lib/rubros';
 import { Rubro360Panel } from './Rubro360Panel';
 import { getRubroTheme } from './RubroDashboard360';
+import { toggleClienteRubro } from '../services/googleSheetsService';
+
+const MANUAL_RUBROS_STORAGE_KEY = 'fdv_manual_rubros_v1';
+
+type ManualRubrosMap = Record<string, Partial<Record<RubroCodigo, boolean>>>;
+
+const loadManualRubros = (): ManualRubrosMap => {
+  try {
+    const raw = localStorage.getItem(MANUAL_RUBROS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 
 interface Props {
   filteredVolumen: any[];
@@ -19,6 +35,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const [searchTerm, setSearchTerm] = React.useState('');
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
   const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
+  const [manualOverrides, setManualOverrides] = useState<ManualRubrosMap>(() => loadManualRubros());
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
 
   const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
@@ -35,6 +52,30 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
       return next;
     });
   };
+
+  const handleToggleClientRubro = (codigoRaw: string, rCode: RubroCodigo, currentHas: boolean) => {
+    const cleanCode = String(codigoRaw || '').replace(/^[#\s]+/, '').trim();
+    if (!cleanCode) return;
+    const nextActive = !currentHas;
+
+    setManualOverrides((prev) => {
+      const currentClientMap = prev[cleanCode] || {};
+      const updated: ManualRubrosMap = {
+        ...prev,
+        [cleanCode]: {
+          ...currentClientMap,
+          [rCode]: nextActive,
+        },
+      };
+      try {
+        localStorage.setItem(MANUAL_RUBROS_STORAGE_KEY, JSON.stringify(updated));
+        window.dispatchEvent(new CustomEvent('fdv-manual-rubros-updated'));
+      } catch {}
+      return updated;
+    });
+
+    toggleClienteRubro(cleanCode, rCode, nextActive);
+  };
   
   // Cálculos dinámicos basados en clientes únicos y sus rubros
   const { 
@@ -47,21 +88,53 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     const clientMap = new Map<string, { id: string, name: string, isActivo: boolean, rubrosComprados: Set<string> }>();
     
     filteredActivacion.forEach(a => {
-      const rubros = new Set<string>();
-      if (a.cats) {
-        if (a.cats.ACEITE) rubros.add('ACEITE');
-        if (a.cats.AZUCAR) rubros.add('AZÚCAR');
-        if (a.cats.POLLO || a.cats.ARROZ) rubros.add('POLLO');
-        if (a.cats.ESTANDAR_ASTURIAS || a.cats.ENTERO) rubros.add('ESTANDAR Y SUPERIOR ASTURIAS');
-        if (a.cats.MORTADELA_SALPICAO || a.cats.LIGEROS) rubros.add('MORTADELA SALPICAO Y ASTURIAS');
+      const key = a.id ? String(a.id).replace(/^[#\s]+/, '').trim() : String(a.cliente || '').trim();
+      if (!key) return;
+      const existing = clientMap.get(key);
+      const rubros = existing ? existing.rubrosComprados : new Set<string>();
+
+      const cAceite = Number(a.cajas?.ACEITE) || 0;
+      const cAzucar = Number(a.cajas?.AZUCAR) || 0;
+      const cPollo = Number(a.cajas?.POLLO) || 0;
+      const cAsturias = Number(a.cajas?.ESTANDAR_ASTURIAS) || 0;
+      const cSalpicao = Number(a.cajas?.MORTADELA_SALPICAO) || 0;
+
+      if (a.cats?.ACEITE || cAceite > 0) rubros.add('ACEITE');
+      if (a.cats?.AZUCAR || a.cats?.AZÚCAR || cAzucar > 0) rubros.add('AZÚCAR');
+      if (a.cats?.POLLO || a.cats?.ARROZ || cPollo > 0) rubros.add('POLLO');
+      if (a.cats?.ESTANDAR_ASTURIAS || a.cats?.ENTERO || cAsturias > 0) rubros.add('ESTANDAR Y SUPERIOR ASTURIAS');
+      if (a.cats?.MORTADELA_SALPICAO || a.cats?.LIGEROS || cSalpicao > 0) rubros.add('MORTADELA SALPICAO Y ASTURIAS');
+
+      // Aplicar activaciones manuales del vendedor si existen
+      const ov = manualOverrides[key];
+      if (ov) {
+        if (ov.ACEITE === true) rubros.add('ACEITE');
+        else if (ov.ACEITE === false) rubros.delete('ACEITE');
+
+        if (ov.AZUCAR === true) rubros.add('AZÚCAR');
+        else if (ov.AZUCAR === false) { rubros.delete('AZÚCAR'); rubros.delete('AZUCAR'); }
+
+        if (ov.POLLO === true) rubros.add('POLLO');
+        else if (ov.POLLO === false) rubros.delete('POLLO');
+
+        if (ov.ESTANDAR_ASTURIAS === true) rubros.add('ESTANDAR Y SUPERIOR ASTURIAS');
+        else if (ov.ESTANDAR_ASTURIAS === false) rubros.delete('ESTANDAR Y SUPERIOR ASTURIAS');
+
+        if (ov.MORTADELA_SALPICAO === true) rubros.add('MORTADELA SALPICAO Y ASTURIAS');
+        else if (ov.MORTADELA_SALPICAO === false) rubros.delete('MORTADELA SALPICAO Y ASTURIAS');
       }
-      const isActivo = a.status === 'ACTIVO' || rubros.size > 0;
-      const key = a.id ? String(a.id).trim() : String(a.cliente || '').trim();
-      clientMap.set(key, { id: a.id, name: a.cliente, isActivo, rubrosComprados: rubros });
+
+      const isActivo = rubros.size > 0 || (!ov && a.status === 'ACTIVO' && Boolean(existing?.isActivo));
+      clientMap.set(key, {
+        id: a.id ? String(a.id).replace(/^[#\s]+/, '').trim() : key,
+        name: a.cliente || existing?.name || '',
+        isActivo: rubros.size > 0,
+        rubrosComprados: rubros
+      });
     });
 
     let baseTotal = clientMap.size;
-    let baseActivos = Array.from(clientMap.values()).filter(c => c.isActivo).length;
+    let baseActivos = Array.from(clientMap.values()).filter(c => c.isActivo || c.rubrosComprados.size > 0).length;
 
     const _faltan = Math.max(0, baseTotal - baseActivos);
     const _porcentaje = baseTotal > 0 ? (baseActivos / baseTotal) * 100 : 0;
@@ -138,7 +211,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
        saludCartera: _saludCartera,
        clientList
     };
-  }, [filteredVolumen, filteredActivacion]);
+  }, [filteredVolumen, filteredActivacion, manualOverrides]);
 
   const isEnRitmo = ritmoActual >= ritmoRequerido;
   const totalCartera = (faltantesPorActivar + cienPorCientoActivados) || totalClientes || 1;
@@ -295,8 +368,6 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
     doc.save(`Reporte_Clientes_${vendedorName.replace(/\s+/g, '_')}_Sept_2026.pdf`);
   };
-
-  
 
   return (
     <div className="space-y-6">
@@ -464,7 +535,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <ShieldAlert className="w-4 h-4" /> Faltantes Por Activar
                    </h4>
                    <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {Math.round((faltantesPorActivar / totalClientes) * 100)}% Cartera
+                     {totalClientes > 0 ? Math.round((faltantesPorActivar / totalClientes) * 100) : 0}% Cartera
                    </div>
                 </div>
 
@@ -480,7 +551,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
                 <div className="mt-auto relative z-10">
                    <div className="w-full bg-neutral-900 rounded-full h-1.5 overflow-hidden border border-neutral-800">
-                      <div className="bg-red-500 h-full rounded-full" style={{ width: `${Math.min(100, (faltantesPorActivar / totalClientes) * 100)}%` }}></div>
+                      <div className="bg-red-500 h-full rounded-full" style={{ width: `${totalClientes > 0 ? Math.min(100, (faltantesPorActivar / totalClientes) * 100) : 0}%` }}></div>
                    </div>
                 </div>
              </div>
@@ -494,7 +565,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <XCircle className="w-4 h-4" /> Sin Ningún Rubro (0/5)
                    </h4>
                    <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {Math.round((sinNingunRubro / totalClientes) * 100)}% Cartera
+                     {totalClientes > 0 ? Math.round((sinNingunRubro / totalClientes) * 100) : 0}% Cartera
                    </div>
                 </div>
 
@@ -510,7 +581,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
                 <div className="mt-auto relative z-10">
                    <div className="w-full bg-neutral-900 rounded-full h-1.5 overflow-hidden border border-neutral-800">
-                      <div className="bg-red-600 h-full rounded-full" style={{ width: `${Math.min(100, (sinNingunRubro / totalClientes) * 100)}%` }}></div>
+                      <div className="bg-red-600 h-full rounded-full" style={{ width: `${totalClientes > 0 ? Math.min(100, (sinNingunRubro / totalClientes) * 100) : 0}%` }}></div>
                    </div>
                 </div>
              </div>
@@ -524,7 +595,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <CheckCircle2 className="w-4 h-4" /> 100% Activados (5/5)
                    </h4>
                    <div className="bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {Math.round((cienPorCientoActivados / totalClientes) * 100)}% Cobertura
+                     {totalClientes > 0 ? Math.round((cienPorCientoActivados / totalClientes) * 100) : 0}% Cobertura
                    </div>
                 </div>
 
@@ -540,7 +611,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
                 <div className="mt-auto relative z-10">
                    <div className="w-full bg-neutral-900 rounded-full h-1.5 overflow-hidden border border-neutral-800">
-                      <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${Math.min(100, (cienPorCientoActivados / totalClientes) * 100)}%` }}></div>
+                      <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${totalClientes > 0 ? Math.min(100, (cienPorCientoActivados / totalClientes) * 100) : 0}%` }}></div>
                    </div>
                 </div>
              </div>
@@ -560,7 +631,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  Detalle de Cobertura por Cliente
                </h2>
                <p className="text-[11px] font-sans text-neutral-400">
-                 Tilda uno o varios rubros (selección múltiple) para <strong>filtrar los clientes activos en ese rubro</strong> y desplegar su <strong>Dashboard 360° Histórico</strong>.
+                 Tilda uno o varios rubros arriba para <strong>filtrar clientes activos y ver su Dashboard 360°</strong>, o toca los rubros de un cliente para <strong>activarlos en verde</strong>.
                </p>
              </div>
            </div>
@@ -663,20 +734,39 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                   displayedClients.map((client, idx) => {
                     const bgClass = idx % 2 === 0 ? 'bg-[#141414]' : 'bg-[#0a0a0a]';
                     const getCell = (has: boolean, rCode: RubroCodigo) => has ? (
-                       <td onClick={() => toggleRubro360(rCode, true)} title={`Ver Dashboard 360° de ${RUBRO_LABEL[rCode]}`} className="p-3 text-center border-r border-neutral-800/50 bg-emerald-950/20 text-emerald-400 font-bold cursor-pointer hover:bg-emerald-900/30 transition-colors">SI</td>
+                       <td
+                         key={`${client.codigo}-${rCode}-1`}
+                         translate="no"
+                         onClick={() => handleToggleClientRubro(client.codigo, rCode, true)}
+                         title={`Rubro ${RUBRO_LABEL[rCode]} ACTIVO en ${client.razonSocial} (Clic para desmarcar)`}
+                         className="p-3 text-center border-r border-neutral-800/50 bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-300 font-extrabold cursor-pointer transition-colors"
+                       >
+                         <span className="inline-flex items-center justify-center gap-1">
+                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                           <span>SI</span>
+                         </span>
+                       </td>
                     ) : (
-                       <td onClick={() => toggleRubro360(rCode, true)} title={`Ver Dashboard 360° de ${RUBRO_LABEL[rCode]}`} className="p-3 text-center border-r border-neutral-800/50 bg-neutral-900/40 text-neutral-600 font-bold cursor-pointer hover:bg-neutral-800/50 transition-colors">-</td>
+                       <td
+                         key={`${client.codigo}-${rCode}-0`}
+                         translate="no"
+                         onClick={() => handleToggleClientRubro(client.codigo, rCode, false)}
+                         title={`Clic para activar ${RUBRO_LABEL[rCode]} en ${client.razonSocial}`}
+                         className="p-3 text-center border-r border-neutral-800/50 bg-neutral-900/40 hover:bg-emerald-950/30 text-neutral-600 hover:text-emerald-400 font-bold cursor-pointer transition-colors"
+                       >
+                         -
+                       </td>
                     );
 
-                    let badgeColor = 'border-red-900/50 bg-red-950/40 text-red-400';
-                    if (client.cobertura === 5) badgeColor = 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400';
-                    else if (client.cobertura >= 3) badgeColor = 'border-amber-900/50 bg-amber-950/40 text-amber-400';
+                    const badgeColor = client.cobertura > 0
+                      ? 'border-emerald-400 bg-emerald-600/30 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.25)]'
+                      : 'border-red-900/50 bg-red-950/40 text-red-400';
                     
                     const percentage = client.cobertura * 20;
 
                     return (
-                       <tr key={idx} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
-                          <td className="p-3 border-r border-neutral-800/50 text-white font-sans text-center font-bold">{client.codigo}</td>
+                       <tr key={client.codigo} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
+                          <td translate="no" className="p-3 border-r border-neutral-800/50 text-white font-sans text-center font-bold">{client.codigo}</td>
                           <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase">{client.razonSocial}</td>
                           {getCell(client.hasAceite, 'ACEITE')}
                           {getCell(client.hasAzucar, 'AZUCAR')}
@@ -684,8 +774,13 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                           {getCell(client.hasEstandarAsturias, 'ESTANDAR_ASTURIAS')}
                           {getCell(client.hasMortadelaSalpicao, 'MORTADELA_SALPICAO')}
                           <td className="p-3 text-center">
-                             <span className={`inline-block px-2 py-1 rounded-full border text-[10px] font-bold ${badgeColor}`}>
-                                {client.cobertura}/5 ({percentage}%)
+                             <span
+                               key={`${client.codigo}-badge-${client.cobertura}`}
+                               translate="no"
+                               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[10px] font-extrabold ${badgeColor}`}
+                             >
+                                {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />}
+                                <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
                              </span>
                           </td>
                        </tr>
@@ -697,7 +792,9 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
          </div>)}
          {/* Mobile View: Cards */}
          <div className={`flex flex-col p-3 gap-3 bg-neutral-950 ${viewMode !== 'tarjetas' ? 'md:hidden' : 'md:grid md:grid-cols-2 lg:grid-cols-3'}`}>
-            <div className="text-[10px] font-sans text-neutral-500 uppercase tracking-wider mb-1 px-1">Desglose por Cliente (Tilda un rubro para ver su historial 360°)</div>
+            <div className="text-[10px] font-sans text-neutral-400 uppercase tracking-wider mb-1 px-1">
+              Desglose por Cliente (Toca los rubros del cliente para activarlos en <span className="text-emerald-400 font-bold">verde</span>)
+            </div>
             
             {displayedClients.length === 0 ? (
               <div className="col-span-full p-8 text-center bg-neutral-900/40 border border-neutral-800 rounded-xl text-neutral-400">
@@ -708,28 +805,55 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
               </div>
             ) : (
-              displayedClients.map((client, idx) => {
-               let badgeColor = 'border-red-900/50 bg-red-950/40 text-red-400';
-               if (client.cobertura === 5) badgeColor = 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400';
-               else if (client.cobertura >= 3) badgeColor = 'border-amber-900/50 bg-amber-950/40 text-amber-400';
+              displayedClients.map((client) => {
+               const badgeColor = client.cobertura > 0
+                 ? 'border-emerald-400 bg-emerald-600/30 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.25)]'
+                 : 'border-red-900/50 bg-red-950/40 text-red-400';
                const percentage = client.cobertura * 20;
 
                const getPill = (name: string, has: boolean, rCode: RubroCodigo) => has ? (
-                  <button type="button" onClick={() => toggleRubro360(rCode, true)} className="bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-900/50 text-emerald-400 text-[9px] font-bold px-2 py-1 rounded cursor-pointer transition-colors">
-                     {name}
+                  <button
+                    key={`${client.codigo}-${rCode}-1`}
+                    type="button"
+                    translate="no"
+                    onClick={() => handleToggleClientRubro(client.codigo, rCode, true)}
+                    title={`Rubro ${name} ACTIVO en ${client.razonSocial}`}
+                    className="inline-flex items-center gap-1 bg-emerald-600/35 hover:bg-emerald-600/50 border-2 border-emerald-400 text-emerald-200 text-[10px] font-extrabold px-2.5 py-1 rounded-md shadow-[0_0_10px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
+                  >
+                     <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />
+                     <span>{name}</span>
                   </button>
                ) : (
-                  <button type="button" onClick={() => toggleRubro360(rCode, true)} className="bg-neutral-900/50 hover:bg-neutral-800 border border-neutral-800 text-neutral-600 text-[9px] font-bold px-2 py-1 rounded line-through cursor-pointer transition-colors">
-                     {name}
+                  <button
+                    key={`${client.codigo}-${rCode}-0`}
+                    type="button"
+                    translate="no"
+                    onClick={() => handleToggleClientRubro(client.codigo, rCode, false)}
+                    title={`Toca para activar ${name} en ${client.razonSocial}`}
+                    className="inline-flex items-center gap-1 bg-neutral-900/60 hover:bg-emerald-950/40 hover:border-emerald-700/60 hover:text-emerald-300 border border-neutral-800 text-neutral-500 text-[10px] font-bold px-2.5 py-1 rounded-md line-through hover:no-underline cursor-pointer transition-all"
+                  >
+                     <span>{name}</span>
                   </button>
                );
 
                return (
-                  <div key={idx} className="bg-neutral-900 border border-neutral-800 rounded-lg p-3">
+                  <div
+                    key={client.codigo}
+                    className={`rounded-lg p-3 transition-all ${
+                      client.cobertura > 0
+                        ? 'bg-neutral-900 border border-emerald-500/40 shadow-[0_0_14px_rgba(16,185,129,0.08)]'
+                        : 'bg-neutral-900 border border-neutral-800'
+                    }`}
+                  >
                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-neutral-400 font-mono text-xs font-bold">{client.codigo}</span>
-                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold ${badgeColor}`}>
-                           {client.cobertura}/5 ({percentage}%)
+                        <span translate="no" className="text-neutral-300 font-mono text-xs font-bold">{client.codigo}</span>
+                        <span
+                          key={`${client.codigo}-badge-${client.cobertura}`}
+                          translate="no"
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-extrabold ${badgeColor}`}
+                        >
+                           {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />}
+                           <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
                         </span>
                      </div>
                      

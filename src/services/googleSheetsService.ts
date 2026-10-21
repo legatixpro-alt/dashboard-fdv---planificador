@@ -101,6 +101,41 @@ export const fetchMetasActivacion = async (force: boolean = false, vendorId?: st
   }
 };
 
+export const toggleClienteRubro = async (
+  clienteCodigo: string,
+  rubro: string,
+  active: boolean
+): Promise<boolean> => {
+  const cleanCod = String(clienteCodigo || '').replace(/^[#\s]+/, '').trim();
+  if (memActivacion && Array.isArray(memActivacion.data)) {
+    memActivacion.data.forEach((c: any) => {
+      const cid = String(c.id || '').replace(/^[#\s]+/, '').trim();
+      if (cid === cleanCod) {
+        if (!c.cats) c.cats = {};
+        c.cats[rubro] = active;
+        const anyActive = Boolean(
+          c.cats.ACEITE || c.cats.AZUCAR || c.cats.POLLO || c.cats.ESTANDAR_ASTURIAS || c.cats.MORTADELA_SALPICAO
+        );
+        c.status = anyActive ? 'ACTIVO' : 'INACTIVO';
+      }
+    });
+  }
+  try {
+    const res = await fetch('/api/data/activacion/toggle-rubro', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({ clienteCodigo: cleanCod, rubro, active })
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn("Error sincronizando rubro de cliente con el servidor:", e);
+    return false;
+  }
+};
+
 export const triggerSheetsSync = async (): Promise<{ success: boolean; message: string; countVolumen?: number; countActivacion?: number }> => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
