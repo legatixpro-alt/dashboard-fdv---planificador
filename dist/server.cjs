@@ -2709,16 +2709,16 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         for (const c of uniqueClients) {
           const cod = String(c.cliente_codigo).trim();
           const cleanCod = cod.replace(/^0+/, "") || cod;
-          const cAceite = mapAceite.get(cod) || mapAceite.get(cleanCod) || Number(c.cajas_aceite) || 0;
-          const cAzucar = mapAzucar.get(cod) || mapAzucar.get(cleanCod) || Number(c.cajas_azucar) || 0;
-          const cPollo = mapPollo.get(cod) || mapPollo.get(cleanCod) || Number(c.cajas_pollo) || 0;
-          const cAsturias = mapAsturias.get(cod) || mapAsturias.get(cleanCod) || Number(c.cajas_estandar_asturias) || 0;
-          const cSalpicao = mapSalpicao.get(cod) || mapSalpicao.get(cleanCod) || Number(c.cajas_mortadela_salpicao) || 0;
-          const hasAceite = Boolean(c.has_aceite) || cAceite > 0;
-          const hasAzucar = Boolean(c.has_azucar) || cAzucar > 0;
-          const hasPollo = Boolean(c.has_pollo) || cPollo > 0;
-          const hasAsturias = Boolean(c.has_estandar_asturias) || cAsturias > 0;
-          const hasSalpicao = Boolean(c.has_mortadela_salpicao) || cSalpicao > 0;
+          const cAceite = mapAceite.get(cod) || mapAceite.get(cleanCod) || 0;
+          const cAzucar = mapAzucar.get(cod) || mapAzucar.get(cleanCod) || 0;
+          const cPollo = mapPollo.get(cod) || mapPollo.get(cleanCod) || 0;
+          const cAsturias = mapAsturias.get(cod) || mapAsturias.get(cleanCod) || 0;
+          const cSalpicao = mapSalpicao.get(cod) || mapSalpicao.get(cleanCod) || 0;
+          const hasAceite = cAceite > 0;
+          const hasAzucar = cAzucar > 0;
+          const hasPollo = cPollo > 0;
+          const hasAsturias = cAsturias > 0;
+          const hasSalpicao = cSalpicao > 0;
           const isActivo = hasAceite || hasAzucar || hasPollo || hasAsturias || hasSalpicao;
           const vNorm = normalizeVendorName(c.vendedor_nombre || c.vendedor_id || "");
           if (!clientActByVendor.has(vNorm)) {

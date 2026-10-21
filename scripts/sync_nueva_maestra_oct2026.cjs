@@ -5,7 +5,7 @@ const XLSX = require('xlsx');
 const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://nudltbgyewyiklqdyujk.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51ZGx0Ymd5ZXd5aWtscWR5dWprIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTgzMDA3OCwiZXhwIjoyMTA3NDA2MDc4fQ.k92vdZiuVkTzAWNK8Fq71m1Xi_MoWtpx_eRQcZTw1cA';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
 const MAESTRA_XLSX_PATH = 'C:/Users/JAVIER CASTELLANOS/.gemini/antigravity/brain/436de5ef-5c42-4d81-8277-a4a5132cc05d/.user_uploaded/media_1792525962922_e8ff7148.xlsx';
@@ -67,6 +67,38 @@ async function main() {
   fs.writeFileSync(path.join(__dirname, '..', 'sheet.xlsx'), fileBuffer);
   const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
   console.log('✓ Google Sheet descargado y respaldado en sheet.xlsx');
+
+  const seenCodes = new Set(parsedClients.map(c => String(c.id).trim().replace(/^0+/, '') || String(c.id).trim()));
+  const actSheet = workbook.Sheets['Activación por Cliente'];
+  if (actSheet) {
+    const actRows = XLSX.utils.sheet_to_json(actSheet, { header: 1 });
+    let extraCount = 0;
+    for (let i = 1; i < actRows.length; i++) {
+      const r = actRows[i];
+      if (!r || !r[0]) continue;
+      const rawCod = String(r[0]).trim();
+      const cleanCod = rawCod.replace(/^0+/, '') || rawCod;
+      if (seenCodes.has(cleanCod)) continue;
+      const gVend = String(r[2] || '').replace(/\s+/g, ' ').trim();
+      if (!gVend || gVend.toUpperCase() === 'ALI PEREZ') continue;
+      seenCodes.add(cleanCod);
+      const mappedVend = gVend.toUpperCase() === 'FOOD SERVICE NORTE'
+        ? 'JAIDER MEDINA - FOOD SERVICE NORTE'
+        : gVend;
+      parsedClients.push({
+        vendorIdNum: '000',
+        vendedor: mappedVend,
+        id: rawCod,
+        razonSocial: String(r[1] || '').trim(),
+        rif: '',
+        tipoCliente: ''
+      });
+      extraCount++;
+    }
+    if (extraCount > 0) {
+      console.log(`✓ Incorporados ${extraCount} clientes adicionales desde 'Activación por Cliente' del Google Sheet.`);
+    }
+  }
 
   const findSheet = (patterns) => {
     const found = workbook.SheetNames.find(n =>

@@ -739,10 +739,10 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                          translate="no"
                          onClick={() => handleToggleClientRubro(client.codigo, rCode, true)}
                          title={`Rubro ${RUBRO_LABEL[rCode]} ACTIVO en ${client.razonSocial} (Clic para desmarcar)`}
-                         className="p-3 text-center border-r border-neutral-800/50 bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-300 font-extrabold cursor-pointer transition-colors"
+                         className="p-3 text-center border-r border-neutral-800/50 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold cursor-pointer transition-colors"
                        >
                          <span className="inline-flex items-center justify-center gap-1">
-                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                           <CheckCircle2 className="w-3.5 h-3.5 text-white shrink-0" />
                            <span>SI</span>
                          </span>
                        </td>
@@ -759,7 +759,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                     );
 
                     const badgeColor = client.cobertura > 0
-                      ? 'border-emerald-400 bg-emerald-600/30 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.25)]'
+                      ? 'border-emerald-300 bg-emerald-600 text-white shadow-[0_0_12px_rgba(16,185,129,0.45)]'
                       : 'border-red-900/50 bg-red-950/40 text-red-400';
                     
                     const percentage = client.cobertura * 20;
@@ -779,7 +779,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                                translate="no"
                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[10px] font-extrabold ${badgeColor}`}
                              >
-                                {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />}
+                                {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-white shrink-0" />}
                                 <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
                              </span>
                           </td>
@@ -807,7 +807,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
             ) : (
               displayedClients.map((client) => {
                const badgeColor = client.cobertura > 0
-                 ? 'border-emerald-400 bg-emerald-600/30 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.25)]'
+                 ? 'border-emerald-300 bg-emerald-600 text-white shadow-[0_0_12px_rgba(16,185,129,0.45)]'
                  : 'border-red-900/50 bg-red-950/40 text-red-400';
                const percentage = client.cobertura * 20;
 
@@ -818,9 +818,9 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                     translate="no"
                     onClick={() => handleToggleClientRubro(client.codigo, rCode, true)}
                     title={`Rubro ${name} ACTIVO en ${client.razonSocial}`}
-                    className="inline-flex items-center gap-1 bg-emerald-600/35 hover:bg-emerald-600/50 border-2 border-emerald-400 text-emerald-200 text-[10px] font-extrabold px-2.5 py-1 rounded-md shadow-[0_0_10px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
+                    className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-500 border-2 border-emerald-300 text-white text-[10px] font-extrabold px-2.5 py-1 rounded-md shadow-[0_0_12px_rgba(16,185,129,0.45)] cursor-pointer transition-all"
                   >
-                     <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />
+                     <CheckCircle2 className="w-3.5 h-3.5 text-white shrink-0" />
                      <span>{name}</span>
                   </button>
                ) : (
@@ -841,7 +841,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                     key={client.codigo}
                     className={`rounded-lg p-3 transition-all ${
                       client.cobertura > 0
-                        ? 'bg-neutral-900 border border-emerald-500/40 shadow-[0_0_14px_rgba(16,185,129,0.08)]'
+                        ? 'bg-neutral-900 border-2 border-emerald-500/60 shadow-[0_0_16px_rgba(16,185,129,0.12)]'
                         : 'bg-neutral-900 border border-neutral-800'
                     }`}
                   >
@@ -852,7 +852,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                           translate="no"
                           className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-extrabold ${badgeColor}`}
                         >
-                           {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />}
+                           {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-white shrink-0" />}
                            <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
                         </span>
                      </div>
