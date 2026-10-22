@@ -652,12 +652,32 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         ];
       });
 
+      tableData.push([
+        'TOTAL',
+        `${pagosConsolidados.length} pagos`,
+        '',
+        '',
+        new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totalMonto),
+        '',
+        '',
+        '',
+        '',
+        '',
+        `$${totalUSD.toFixed(2)}`
+      ]);
+
       autoTable(doc, {
         startY: 30,
         head: [['C.C', 'Cliente', 'Factura', 'Banco', 'Monto (Bs.)', 'Referencia', 'Fecha', 'Titular', 'RIF/CI', 'Tasa', 'USD ($)']],
         body: tableData,
         headStyles: { fillColor: [211, 47, 47] },
         styles: { fontSize: 8 },
+        didParseCell: (data) => {
+          if (data.section === 'body' && data.row.index === tableData.length - 1) {
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        },
         theme: 'grid'
       });
 
@@ -712,6 +732,10 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       const doc = new jsPDF('landscape');
       const pagos = Array.isArray(rel.pagos) ? rel.pagos : [];
       const totalMonto = Number(rel.montoTotal) || pagos.reduce((acc: number, curr: any) => acc + (Number(curr.monto) || 0), 0);
+      const totalUSD = pagos.reduce((acc: number, curr: any) => {
+        const t = Number(curr.tasa) || 0;
+        return acc + (t > 0 ? (Number(curr.monto) || 0) / t : 0);
+      }, 0);
 
       doc.setFontSize(14);
       doc.setTextColor(211, 47, 47);
@@ -720,7 +744,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       doc.setFontSize(9);
       doc.setTextColor(60, 60, 60);
       doc.text(`Vendedor: ${rel.vendedor || currentVendedor}  |  Fecha: ${new Date(rel.fecha).toLocaleDateString('es-VE')} ${new Date(rel.fecha).toLocaleTimeString('es-VE')}`, 14, 21);
-      doc.text(`Total Pagos: ${pagos.length}  |  Total Bs: ${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2 }).format(totalMonto)}`, 14, 26);
+      doc.text(`Total Pagos: ${pagos.length}  |  Total Bs: ${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2 }).format(totalMonto)}  |  Total USD: $${totalUSD.toFixed(2)}`, 14, 26);
 
       const tableData = pagos.map((p: any) => {
         const m = Number(p.monto) || 0;
@@ -741,12 +765,34 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         ];
       });
 
+      if (pagos.length > 0) {
+        tableData.push([
+          'TOTAL',
+          `${pagos.length} pagos`,
+          '',
+          '',
+          new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(totalMonto),
+          '',
+          '',
+          '',
+          '',
+          '',
+          `$${totalUSD.toFixed(2)}`
+        ]);
+      }
+
       autoTable(doc, {
         startY: 30,
         head: [['C.C', 'Cliente', 'Factura', 'Banco', 'Monto (Bs.)', 'Referencia', 'Fecha', 'Titular', 'RIF/CI', 'Tasa', 'USD ($)']],
         body: tableData,
         headStyles: { fillColor: [211, 47, 47] },
         styles: { fontSize: 8 },
+        didParseCell: (data) => {
+          if (data.section === 'body' && pagos.length > 0 && data.row.index === tableData.length - 1) {
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        },
         theme: 'grid'
       });
 

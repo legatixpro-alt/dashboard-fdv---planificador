@@ -34,81 +34,13 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'focus' | 'hoja' | 'tarjetas'>('hoja');
 
-  // In a real scenario, meta could be higher, using static multiplier to match the design vibe 
-  // since the mock data is too small to look like the 50k+ numbers in the screenshot.
-  const rawMeta = filteredVolumen.reduce((acc, curr) => {
-    const val = Number(curr.meta ?? (curr as any).metaKg);
-    return acc + (isNaN(val) ? 0 : val);
-  }, 0);
-  const rawEjecutado = filteredVolumen.reduce((acc, curr) => {
-    const val = Number(curr.ejecutado ?? (curr as any).ejecutadoKg);
-    return acc + (isNaN(val) ? 0 : val);
-  }, 0);
-  
   // Scaling mock data to look like the screenshot if it's less than 10k
   const scaleFactor = 1; 
-  
-  const totalMeta = Math.round((Number(rawMeta) || 0) * scaleFactor);
-  const totalEjecutado = Math.round((Number(rawEjecutado) || 0) * scaleFactor);
-  
-  const cumplimiento = totalMeta > 0 ? (totalEjecutado / totalMeta) * 100 : 0;
-  const faltante = Math.max(0, totalMeta - totalEjecutado);
-  const mesInfo = useMemo(() => getMesLaboralInfo(), []);
-  const diasRestantes = Math.max(1, mesInfo.remainingWorkingDays || 1);
-  const diasTranscurridos = Math.max(0, mesInfo.elapsedWorkingDays || 0);
-  const diasTotales = Math.max(1, mesInfo.totalWorkingDays || 22);
-  const avanceTiempo = mesInfo.percentage || 0;
-  
-  // Proyeccion cierre = (Ejecutado / dias transcurridos) * dias totales
-  const proyeccion = diasTranscurridos > 0 ? Math.round((totalEjecutado / diasTranscurridos) * diasTotales) : totalEjecutado;
-  const ritmoRequerido = diasRestantes > 0 ? Math.round(faltante / diasRestantes) : 0;
 
-  const formatNumber = (num: number | undefined | null) => {
-    if (num === null || num === undefined || isNaN(Number(num))) return '0';
-    return Number(num).toLocaleString('en-US');
-  };
-
-  const generarPDF = () => {
-    const doc = new jsPDF();
-    const title = "Reporte de Volumen";
-    doc.setFontSize(16);
-    doc.text(title, 14, 15);
-    doc.setFontSize(10);
-    const vendedorName = activeVendedorId === 'ADMIN' ? 'TODOS LOS VENDEDORES' : activeVendedorId;
-    doc.text(`Vendedor: ${vendedorName}`, 14, 22);
-    
-    const tableData = filteredSkuStats.map(stat => [
-      stat.skuId,
-      stat.articulo,
-      stat.sinCuota ? '-' : formatNumber(stat.meta),
-      stat.sinHist ? '-' : formatNumber(stat.ejecutado),
-      stat.sinCuota ? '-' : (isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2) + '%'
-    ]);
-    
-    tableData.push([
-      'TOTAL',
-      '',
-      formatNumber(totalMeta),
-      formatNumber(totalEjecutado),
-      (isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2) + '%'
-    ]);
-
-    autoTable(doc, {
-      startY: 30,
-      head: [['Cod', 'Articulo', 'Cuota (KG)', 'Ejecutado (KG)', '%']],
-      body: tableData,
-      headStyles: { fillColor: [211, 47, 47] },
-      theme: 'grid'
-    });
-
-    doc.save(`Reporte_Volumen_${vendedorName.replace(/\s+/g, '_')}.pdf`);
-  };
-
-  // Aggregating SKU data
+  // Aggregating SKU data first so that totalMeta and totalEjecutado match the exact sum of the SKU rows
   const skuStats: SkuStats[] = useMemo(() => {
     const map = new Map<string, SkuStats>();
     
-    // Helper to simulate article names since mock data only has IDs
     const getArticuloName = (sku: string) => {
        if (sku === 'SKU001') return 'JUGOS VARIOS';
        if (sku === 'SKU002') return 'LECHE EN POLVO VENCAMPO';
@@ -147,6 +79,26 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
       return s;
     }).sort((a, b) => b.ejecutado - a.ejecutado); // Sort descending by executed
   }, [filteredVolumen]);
+
+  const totalMeta = useMemo(() => skuStats.reduce((acc, s) => acc + s.meta, 0), [skuStats]);
+  const totalEjecutado = useMemo(() => skuStats.reduce((acc, s) => acc + s.ejecutado, 0), [skuStats]);
+  
+  const cumplimiento = totalMeta > 0 ? (totalEjecutado / totalMeta) * 100 : 0;
+  const faltante = Math.max(0, totalMeta - totalEjecutado);
+  const mesInfo = useMemo(() => getMesLaboralInfo(), []);
+  const diasRestantes = Math.max(1, mesInfo.remainingWorkingDays || 1);
+  const diasTranscurridos = Math.max(0, mesInfo.elapsedWorkingDays || 0);
+  const diasTotales = Math.max(1, mesInfo.totalWorkingDays || 22);
+  const avanceTiempo = mesInfo.percentage || 0;
+  
+  // Proyeccion cierre = (Ejecutado / dias transcurridos) * dias totales
+  const proyeccion = diasTranscurridos > 0 ? Math.round((totalEjecutado / diasTranscurridos) * diasTotales) : totalEjecutado;
+  const ritmoRequerido = diasRestantes > 0 ? Math.round(faltante / diasRestantes) : 0;
+
+  const formatNumber = (num: number | undefined | null) => {
+    if (num === null || num === undefined || isNaN(Number(num))) return '0';
+    return Number(num).toLocaleString('en-US');
+  };
 
   // ── Historial real (ventas_historial) + filtro de fechas + selección múltiple 360° ──
   const vendedorHist = vendedorFilter || activeVendedorId;
@@ -241,6 +193,118 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
   if (viewMode === 'focus') {
     filteredSkuStats = filteredSkuStats.filter(stat => stat.cumplimiento < 100);
   }
+
+  const generarPDF = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const vendedorName = activeVendedorId === 'ADMIN' ? 'TODOS LOS VENDEDORES' : activeVendedorId;
+    const fechaEmision = new Date().toLocaleDateString('es-VE');
+    const periodoLabel = useHist
+      ? `${etiquetaMeses}${showActual ? ' + MES ACTUAL' : ''}`
+      : `${mesInfo.monthName.toUpperCase()} ${mesInfo.year}`;
+
+    // Header Banner
+    doc.setFillColor(185, 0, 0);
+    doc.rect(0, 0, 210, 22, 'F');
+    doc.setFontSize(13);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CODIZULCA C.A. - GESTIÓN DE FUERZA DE VENTAS', 14, 10);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`REPORTE DE VOLUMEN POR SKU - PERÍODO: ${periodoLabel}`, 14, 17);
+
+    // Meta details
+    doc.setTextColor(40, 40, 40);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Vendedor: ${vendedorName}`, 14, 29);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Avance Mes: Día ${diasTranscurridos}/${diasTotales} (${(isNaN(avanceTiempo) ? 0 : avanceTiempo).toFixed(0)}%)`, 90, 29);
+    doc.text(`Emisión: ${fechaEmision}`, 160, 29);
+
+    // KPI Summary Box (Exact same metrics displayed in the 4 UI widgets)
+    doc.setFillColor(245, 245, 245);
+    doc.roundedRect(14, 33, 182, 16, 2, 2, 'F');
+    doc.setDrawColor(220, 220, 220);
+    doc.roundedRect(14, 33, 182, 16, 2, 2, 'S');
+
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 100, 100);
+    doc.text('CUOTA TOTAL (KG)', 18, 38);
+    doc.text(useHist ? 'EJECUTADO HISTÓRICO' : 'EJECUTADO (KG)', 56, 38);
+    doc.text('% CUMPL. / FALTA', 98, 38);
+    doc.text('PROY. CIERRE', 138, 38);
+    doc.text('RITMO DIARIO REQ.', 166, 38);
+
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20, 20, 20);
+    doc.text(useHist ? '—' : `${formatNumber(totalMeta)} KG`, 18, 45);
+    doc.text(`${formatNumber(useHist ? totalMostrado : totalEjecutado)} KG`, 56, 45);
+    doc.text(
+      useHist ? '—' : `${(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(1)}% (${formatNumber(faltante)} kg)`,
+      98,
+      45
+    );
+    doc.text(useHist ? '—' : `${formatNumber(proyeccion)} KG`, 138, 45);
+    doc.text(useHist ? '—' : `${formatNumber(ritmoRequerido)} KG/d`, 166, 45);
+
+    const tableData = filteredSkuStats.map(stat => [
+      stat.skuId,
+      stat.articulo,
+      stat.sinCuota ? '—' : formatNumber(stat.meta),
+      stat.sinHist ? '—' : stat.ejecutado === 0 ? '-' : formatNumber(stat.ejecutado),
+      stat.sinCuota ? '—' : (isNaN(stat.cumplimiento) ? 0 : stat.cumplimiento).toFixed(2) + '%'
+    ]);
+
+    const filtMeta = filteredSkuStats.reduce((acc, s) => acc + (s.sinCuota ? 0 : s.meta), 0);
+    const filtEjec = filteredSkuStats.reduce((acc, s) => acc + (s.sinHist ? 0 : s.ejecutado), 0);
+    const filtCumpl = filtMeta > 0 ? (filtEjec / filtMeta) * 100 : 0;
+
+    const isSubsetFiltered = filteredSkuStats.length < viewStats.length;
+    if (isSubsetFiltered) {
+      tableData.push([
+        'SUBTOTAL',
+        `SUBTOTAL FILTRADO (${filteredSkuStats.length} SKUs)`,
+        useHist ? '—' : formatNumber(filtMeta),
+        formatNumber(filtEjec),
+        useHist ? '—' : `${filtCumpl.toFixed(2)}%`
+      ]);
+    }
+
+    tableData.push([
+      'TOTAL',
+      'RESUMEN ACUMULADO VENDEDOR',
+      useHist ? '—' : formatNumber(totalMeta),
+      formatNumber(useHist ? totalMostrado : totalEjecutado),
+      useHist ? '—' : `${(isNaN(cumplimiento) ? 0 : cumplimiento).toFixed(2)}%`
+    ]);
+
+    autoTable(doc, {
+      startY: 54,
+      head: [['Cod', 'Artículo', 'Cuota (KG)', useHist ? 'Ejecutado (Filtro KG)' : 'Ejecutado (KG)', '% Cumpl.']],
+      body: tableData,
+      headStyles: { fillColor: [185, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
+      columnStyles: {
+        0: { cellWidth: 22 },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 28, halign: 'right' },
+        3: { cellWidth: 32, halign: 'right' },
+        4: { cellWidth: 22, halign: 'right' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.row.index >= filteredSkuStats.length) {
+          data.cell.styles.fillColor = [240, 240, 240];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [20, 20, 20];
+        }
+      },
+      theme: 'grid'
+    });
+
+    doc.save(`Reporte_Volumen_${vendedorName.replace(/\s+/g, '_')}_${periodoLabel.replace(/[\s,+]+/g, '_')}.pdf`);
+  };
 
   return (
     <div className="space-y-6">

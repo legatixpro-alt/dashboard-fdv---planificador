@@ -177,43 +177,135 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
   const totalCumplimiento = totalMeta > 0 ? (totalActivados / totalMeta) * 100 : 0;
   
   const generarPDF = () => {
-    const doc = new jsPDF();
-    const title = "Reporte de Activación por Rubro";
-    doc.setFontSize(16);
-    doc.text(title, 14, 15);
-    doc.setFontSize(10);
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const vendedorName = activeVendedorId === 'ADMIN' ? 'TODOS LOS VENDEDORES' : (activeVendedorId || 'TODOS LOS VENDEDORES');
-    doc.text(`Vendedor: ${vendedorName}`, 14, 22);
-    
-    const tableData = filteredStats.map((stat, idx) => [
-      (idx + 1).toString(),
-      stat.categoria,
-      stat.meta.toString(),
-      stat.activados.toString(),
-      stat.faltante.toString(),
-      stat.cumplimiento.toFixed(2) + '%',
-      stat.estCierre.toString()
-    ]);
-    
+    const fechaEmision = new Date().toLocaleDateString('es-VE');
+    const periodoLabel = `${mesInfo.monthName.toUpperCase()} ${mesInfo.year}`;
+    const diasRestantesMes = Math.max(1, mesInfo.remainingWorkingDays);
+    const totalEstCierreVal = categoriaStats.reduce((acc, curr) => acc + curr.estCierre, 0);
+
+    // Header Banner
+    doc.setFillColor(185, 0, 0);
+    doc.rect(0, 0, 210, 22, 'F');
+    doc.setFontSize(13);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CODIZULCA C.A. - GESTIÓN DE FUERZA DE VENTAS', 14, 10);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`REPORTE DE ACTIVACIÓN POR RUBRO - PERÍODO ${periodoLabel}`, 14, 17);
+
+    // Meta details
+    doc.setTextColor(40, 40, 40);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Vendedor: ${vendedorName}`, 14, 29);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Avance Mes: ${mesInfo.elapsedWorkingDays} de ${mesInfo.totalWorkingDays} días hábiles (${mesInfo.percentage}%)`, 85, 29);
+    doc.text(`Emisión: ${fechaEmision}`, 164, 29);
+
+    // KPI Summary Box
+    doc.setFillColor(245, 245, 245);
+    doc.roundedRect(14, 33, 182, 16, 2, 2, 'F');
+    doc.setDrawColor(220, 220, 220);
+    doc.roundedRect(14, 33, 182, 16, 2, 2, 'S');
+
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 100, 100);
+    doc.text('META TOTAL', 18, 38);
+    doc.text('ACTIVADOS', 54, 38);
+    doc.text('FALTANTE', 90, 38);
+    doc.text('% CUMPLIMIENTO', 124, 38);
+    doc.text('EST. CIERRE', 164, 38);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20, 20, 20);
+    doc.text(`${totalMeta} cli`, 18, 45);
+    doc.text(`${totalActivados} cli`, 54, 45);
+    doc.text(`${totalFaltante} cli`, 90, 45);
+    doc.text(`${totalCumplimiento.toFixed(1)}%`, 124, 45);
+    doc.text(`${totalEstCierreVal} cli`, 164, 45);
+
+    const tableData = filteredStats.map((stat, idx) => {
+      const isSuccess = stat.cumplimiento >= 100;
+      const ritmoStr = stat.faltante === 0 ? '0/d' : `${(stat.faltante / diasRestantesMes).toFixed(1)}/d`;
+      const estadoStr = isSuccess ? 'Cumplido (>=100%)' : 'En Riesgo';
+      return [
+        (idx + 1).toString(),
+        stat.categoria,
+        stat.meta.toString(),
+        stat.activados.toString(),
+        stat.faltante === 0 ? '¡Meta! (0)' : stat.faltante.toString(),
+        stat.cumplimiento.toFixed(1) + '%',
+        ritmoStr,
+        estadoStr,
+        `${stat.estCierre} cli`
+      ];
+    });
+
+    const filtMeta = filteredStats.reduce((acc, curr) => acc + curr.meta, 0);
+    const filtActivados = filteredStats.reduce((acc, curr) => acc + curr.activados, 0);
+    const filtFaltante = filteredStats.reduce((acc, curr) => acc + curr.faltante, 0);
+    const filtCumplimiento = filtMeta > 0 ? (filtActivados / filtMeta) * 100 : 0;
+    const filtEstCierre = filteredStats.reduce((acc, curr) => acc + curr.estCierre, 0);
+    const filtRitmo = filtFaltante === 0 ? '0/d' : `${(filtFaltante / diasRestantesMes).toFixed(1)}/d`;
+
+    if (searchTerm.trim() && filteredStats.length < categoriaStats.length) {
+      tableData.push([
+        '',
+        `SUBTOTAL FILTRADO (${filteredStats.length} rubros)`,
+        filtMeta.toString(),
+        filtActivados.toString(),
+        filtFaltante.toString(),
+        filtCumplimiento.toFixed(1) + '%',
+        filtRitmo,
+        filtCumplimiento >= 100 ? 'Cumplido (>=100%)' : 'En Riesgo',
+        `${filtEstCierre} cli`
+      ]);
+    }
+
+    const totalRitmo = totalFaltante === 0 ? '0/d' : `${(totalFaltante / diasRestantesMes).toFixed(1)}/d`;
     tableData.push([
-      '',
-      'TOTAL',
+      'Σ',
+      'TOTALES GENERALES',
       totalMeta.toString(),
       totalActivados.toString(),
       totalFaltante.toString(),
-      totalCumplimiento.toFixed(2) + '%',
-      totalEstCierre.toString()
+      totalCumplimiento.toFixed(1) + '%',
+      totalRitmo,
+      totalCumplimiento >= 100 ? 'Cumplido (>=100%)' : 'En Riesgo',
+      `${totalEstCierreVal} cli`
     ]);
 
     autoTable(doc, {
-      startY: 30,
-      head: [['#', 'Categoría', 'Meta', 'Activados', 'Faltante', '% Cumpl.', 'Est. Cierre']],
+      startY: 54,
+      head: [['#', 'Categoría / Rubro', 'Meta', 'Activados', 'Faltante', '% Cumpl.', 'Ritmo Req.', 'Estado', 'Est. Cierre']],
       body: tableData,
-      headStyles: { fillColor: [211, 47, 47] },
+      headStyles: { fillColor: [185, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 2.5, valign: 'middle' },
+      columnStyles: {
+        0: { cellWidth: 8, halign: 'center' },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 16, halign: 'center' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 18, halign: 'center' },
+        5: { cellWidth: 18, halign: 'center' },
+        6: { cellWidth: 18, halign: 'center' },
+        7: { cellWidth: 28, halign: 'center' },
+        8: { cellWidth: 20, halign: 'center' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.row.index >= filteredStats.length) {
+          data.cell.styles.fillColor = [240, 240, 240];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [20, 20, 20];
+        }
+      },
       theme: 'grid'
     });
 
-    doc.save(`Reporte_Activacion_Rubro_${vendedorName.replace(/\s+/g, '_')}.pdf`);
+    doc.save(`Reporte_Activacion_Rubro_${vendedorName.replace(/\s+/g, '_')}_${periodoLabel.replace(/\s+/g, '_')}.pdf`);
   };
 
   const totalEstCierre = categoriaStats.reduce((acc, curr) => acc + curr.estCierre, 0);

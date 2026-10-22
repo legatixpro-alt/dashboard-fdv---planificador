@@ -80,7 +80,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   // Cálculos dinámicos basados en clientes únicos y sus rubros
   const { 
     totalClientes, activos, faltan, porcentaje, ritmoRequerido, proyeccionCierre, ritmoActual,
-    diasTotales, diasTranscurridos, diasRestantes,
+    diasTotales, diasTranscurridos, diasRestantes, mesNombre, anioActual, avanceMesPorcentaje,
     faltantesPorActivar, sinNingunRubro, cienPorCientoActivados, saludCartera, clientList
   } = useMemo(() => {
     
@@ -205,6 +205,9 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
        diasTotales,
        diasTranscurridos,
        diasRestantes,
+       mesNombre: mesInfo.monthName,
+       anioActual: mesInfo.year,
+       avanceMesPorcentaje: mesInfo.percentage,
        faltantesPorActivar: _faltantesPorActivar,
        sinNingunRubro: _sinNingunRubro,
        cienPorCientoActivados: _cienPorCientoActivados,
@@ -262,6 +265,8 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const vendedorName = activeVendedorId === 'ADMIN' ? 'TODOS LOS VENDEDORES' : activeVendedorId;
+    const fechaEmision = new Date().toLocaleDateString('es-VE');
+    const periodoLabel = `${(mesNombre || 'OCTUBRE').toUpperCase()} ${anioActual || new Date().getFullYear()}`;
 
     // Header Banner
     doc.setFillColor(185, 0, 0);
@@ -274,38 +279,88 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.text('REPORTE OFICIAL DE ACTIVACIÓN POR CLIENTE - CORTE SEPTIEMBRE 2026', 14, 17);
+    doc.text(`REPORTE OFICIAL DE ACTIVACIÓN POR CLIENTE - PERÍODO ${periodoLabel}`, 14, 17);
 
     // Meta details section
     doc.setTextColor(40, 40, 40);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Vendedor: ${vendedorName}`, 14, 30);
+    doc.text(`Vendedor: ${vendedorName}`, 14, 29);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Fecha de Emisión: 15/09/2026`, 140, 30);
+    doc.text(`Avance Mes: Día ${diasTranscurridos}/${diasTotales} (${avanceMesPorcentaje}%)`, 98, 29);
+    doc.text(`Fecha de Emisión: ${fechaEmision}`, 152, 29);
 
-    // Mini KPI Summary Box
+    // KPI Summary Box (Exact same metrics displayed in the App)
     doc.setFillColor(245, 245, 245);
-    doc.roundedRect(14, 34, 182, 16, 2, 2, 'F');
+    doc.roundedRect(14, 33, 182, 27, 2, 2, 'F');
     doc.setDrawColor(220, 220, 220);
-    doc.roundedRect(14, 34, 182, 16, 2, 2, 'S');
+    doc.roundedRect(14, 33, 182, 27, 2, 2, 'S');
 
-    doc.setFontSize(8);
+    // Row 1 of KPIs
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 100, 100);
-    doc.text('CARTERA TOTAL', 18, 39);
-    doc.text('ACTIVADOS', 55, 39);
-    doc.text('% COBERTURA', 90, 39);
-    doc.text('META DIARIA', 125, 39);
-    doc.text('CLIENTES 5/5', 160, 39);
+    doc.text('CARTERA TOTAL', 18, 38);
+    doc.text('ACTIVADOS / %', 54, 38);
+    doc.text('SIN COMPRA (0/5)', 92, 38);
+    doc.text('PROY. CIERRE', 130, 38);
+    doc.text('META DIARIA REQ.', 162, 38);
 
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(20, 20, 20);
-    doc.text(`${totalClientes} cli`, 18, 46);
-    doc.text(`${activos} cli`, 55, 46);
-    doc.text(`${porcentaje.toFixed(1)}%`, 90, 46);
-    doc.text(`${ritmoRequerido.toFixed(1)} cli/d`, 125, 46);
-    doc.text(`${cienPorCientoActivados} cli`, 160, 46);
+    doc.text(`${totalClientes} cli`, 18, 44);
+    doc.text(`${activos} cli (${porcentaje.toFixed(1)}%)`, 54, 44);
+    doc.text(`${sinNingunRubro} cli`, 92, 44);
+    doc.text(`${proyeccionCierre} cli`, 130, 44);
+    doc.text(`${ritmoRequerido.toFixed(1)} cli/d`, 162, 44);
+
+    // Row 2 of KPIs (Salud de Cartera)
+    const pctFaltantes = totalCartera > 0 ? Math.round((faltantesPorActivar / totalCartera) * 100) : 0;
+    const pctSinRubro = totalCartera > 0 ? Math.round((sinNingunRubro / totalCartera) * 100) : 0;
+    const pctCien = totalCartera > 0 ? Math.round((cienPorCientoActivados / totalCartera) * 100) : 0;
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('SALUD CARTERA', 18, 51);
+    doc.text('FALTAN (<5 RUBROS)', 54, 51);
+    doc.text('SIN NINGÚN RUBRO', 92, 51);
+    doc.text('100% ACTIVADOS (5/5)', 130, 51);
+    doc.text('RITMO ACTUAL', 162, 51);
+
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20, 20, 20);
+    doc.text(`${saludCartera.toFixed(1)} / 5 rubros`, 18, 57);
+    doc.text(`${faltantesPorActivar} (${pctFaltantes}%)`, 54, 57);
+    doc.text(`${sinNingunRubro} (${pctSinRubro}%)`, 92, 57);
+    doc.text(`${cienPorCientoActivados} (${pctCien}%)`, 130, 57);
+    doc.text(`${ritmoActual.toFixed(1)} cli/d`, 162, 57);
+
+    let tableStartY = 64;
+    const isFiltered = selectedRubros.length > 0 || searchTerm.trim().length > 0 || viewMode === 'personal';
+    if (isFiltered) {
+      const rubrosTxt = selectedRubros.length > 0
+        ? `Rubros activos: ${selectedRubros.map(r => RUBRO_LABEL[r]).join(', ')}`
+        : viewMode === 'personal'
+        ? 'Modo Personal (< 5 rubros)'
+        : '';
+      const searchTxt = searchTerm.trim() ? `Búsqueda: "${searchTerm.trim()}"` : '';
+      const filterDesc = [rubrosTxt, searchTxt].filter(Boolean).join(' | ');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(185, 0, 0);
+      doc.text(`Filtro aplicado (${displayedClients.length} de ${totalClientes} clientes): ${filterDesc}`, 14, 65);
+      tableStartY = 68;
+    }
+
+    const countAceite = displayedClients.filter(c => c.hasAceite).length;
+    const countAzucar = displayedClients.filter(c => c.hasAzucar).length;
+    const countPollo = displayedClients.filter(c => c.hasPollo).length;
+    const countAsturias = displayedClients.filter(c => c.hasEstandarAsturias).length;
+    const countSalpicao = displayedClients.filter(c => c.hasMortadelaSalpicao).length;
+    const countActivosMostrados = displayedClients.filter(c => c.cobertura > 0).length;
 
     const tableData = displayedClients.map((client) => [
       client.codigo,
@@ -318,8 +373,21 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
       `${client.cobertura}/5 (${client.cobertura * 20}%)`
     ]);
 
+    if (displayedClients.length > 0) {
+      tableData.push([
+        'TOTAL',
+        `CLIENTES ACTIVOS EN LISTADO (${countActivosMostrados} de ${displayedClients.length})`,
+        `${countAceite}`,
+        `${countAzucar}`,
+        `${countPollo}`,
+        `${countAsturias}`,
+        `${countSalpicao}`,
+        `${displayedClients.length > 0 ? ((countActivosMostrados / displayedClients.length) * 100).toFixed(1) : '0.0'}%`
+      ]);
+    }
+
     autoTable(doc, {
-      startY: 54,
+      startY: tableStartY,
       head: [['Cód.', 'Razón Social / Cliente', 'Aceite', 'Azúcar', 'Pollo', 'Est. Asturias', 'Mort. Salpicao', 'Cobertura']],
       body: tableData.length > 0 ? tableData : [['-', 'Sin registros de clientes disponibles para el filtro actual', '-', '-', '-', '-', '-', '-']],
       theme: 'grid',
@@ -347,7 +415,12 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
       },
       didParseCell: (data) => {
         if (data.section === 'body') {
-          if (data.column.index >= 2 && data.column.index <= 6) {
+          const isTotalRow = displayedClients.length > 0 && data.row.index === tableData.length - 1;
+          if (isTotalRow) {
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.textColor = [20, 20, 20];
+            data.cell.styles.fontStyle = 'bold';
+          } else if (data.column.index >= 2 && data.column.index <= 6) {
             if (data.cell.raw === 'SI') {
               data.cell.styles.textColor = [16, 149, 79];
               data.cell.styles.fontStyle = 'bold';
@@ -362,11 +435,11 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         doc.setFontSize(7.5);
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(140, 140, 140);
-        doc.text(`Página ${data.pageNumber} - Confidencial CODIZULCA C.A.`, 14, 290);
+        doc.text(`Página ${data.pageNumber} - Confidencial CODIZULCA C.A. | ${periodoLabel}`, 14, 290);
       }
     });
 
-    doc.save(`Reporte_Clientes_${vendedorName.replace(/\s+/g, '_')}_Sept_2026.pdf`);
+    doc.save(`Reporte_Clientes_${vendedorName.replace(/\s+/g, '_')}_${periodoLabel.replace(/\s+/g, '_')}.pdf`);
   };
 
   return (

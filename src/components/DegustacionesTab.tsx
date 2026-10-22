@@ -488,6 +488,11 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
   // Exportar reporte de degustaciones a PDF
   const handleExportPDF = () => {
     const doc = new jsPDF('landscape');
+    const totalKilos = visibleDegustaciones.reduce((acc, d) => acc + (Number(d.kilosEstimados) || 0), 0);
+    const visSolicitadas = visibleDegustaciones.filter(d => d.estado === 'SOLICITADA').length;
+    const visAprobadas = visibleDegustaciones.filter(d => d.estado === 'APROBADA').length;
+    const visRealizadas = visibleDegustaciones.filter(d => d.estado === 'REALIZADA').length;
+    const visRechazadas = visibleDegustaciones.filter(d => d.estado === 'RECHAZADA' || d.estado === 'CANCELADA').length;
     
     // Header
     doc.setFillColor(15, 23, 42);
@@ -496,11 +501,12 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('CODIZULCA - REPORTE DE DEGUSTACIONES', 14, 15);
+    doc.text('CODIZULCA - REPORTE DE DEGUSTACIONES', 14, 13);
     
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Fecha de emisión: ${new Date().toLocaleDateString('es-VE')} | Usuario: ${vendedorName} (${userRole})`, 14, 23);
+    doc.text(`Fecha de emisión: ${new Date().toLocaleDateString('es-VE')} | Usuario: ${vendedorName} (${userRole}) | Filtro Estado: ${filtroEstado} | Vendedor: ${isManager ? filtroVendedor : vendedorName}`, 14, 20);
+    doc.text(`Resumen: Total ${visibleDegustaciones.length} (Solicitadas: ${visSolicitadas} | Aprobadas: ${visAprobadas} | Realizadas: ${visRealizadas} | Rechazadas: ${visRechazadas}) | Total Kilos Est.: ${totalKilos.toFixed(1)} kg`, 14, 25);
 
     const tableData = visibleDegustaciones.map(d => [
       d.fecha,
@@ -509,14 +515,29 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
       d.turno,
       d.hora || '-',
       (d.productos || []).join(', '),
-      `${d.kilosEstimados} kg`,
+      `${Number(d.kilosEstimados || 0)} kg`,
       d.requierePromotora ? (d.promotoraAsignada || 'Solicitada') : 'No requerida',
       d.estado,
       d.notasTradeMarketing || '-'
     ]);
 
+    if (visibleDegustaciones.length > 0) {
+      tableData.push([
+        'TOTAL',
+        `${visibleDegustaciones.length} degustaciones`,
+        '',
+        '',
+        '',
+        `Aprob: ${visAprobadas} | Realiz: ${visRealizadas}`,
+        `${totalKilos.toFixed(1)} kg`,
+        '',
+        '',
+        ''
+      ]);
+    }
+
     autoTable(doc, {
-      startY: 34,
+      startY: 32,
       head: [['Fecha', 'Cliente / PDV', 'Vendedor', 'Turno', 'Hora', 'Productos', 'Kilos', 'Promotora', 'Estado', 'Seguimiento / Notas']],
       body: tableData,
       theme: 'grid',
@@ -534,6 +555,12 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
         7: { cellWidth: 26 },
         8: { cellWidth: 22 },
         9: { cellWidth: 45 },
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && visibleDegustaciones.length > 0 && data.row.index === tableData.length - 1) {
+          data.cell.styles.fillColor = [226, 232, 240];
+          data.cell.styles.fontStyle = 'bold';
+        }
       }
     });
 
