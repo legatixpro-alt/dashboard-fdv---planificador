@@ -36,7 +36,6 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
   const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
   const [statusFilter, setStatusFilter] = useState<'TODOS' | 'ACTIVOS' | 'FALTANTES' | 'FALTAN_RUBROS' | 'CINCO_RUBROS'>('TODOS');
-  const [faltanteRubroFilter, setFaltanteRubroFilter] = useState<RubroCodigo | null>(null);
   const [manualOverrides, setManualOverrides] = useState<ManualRubrosMap>(() => loadManualRubros());
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
   const clientTableRef = useRef<HTMLDivElement | null>(null);
@@ -45,7 +44,6 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     nextStatus: 'TODOS' | 'ACTIVOS' | 'FALTANTES' | 'FALTAN_RUBROS' | 'CINCO_RUBROS',
     scrollToTable = true
   ) => {
-    setFaltanteRubroFilter(null);
     setSelectedRubros([]);
     setStatusFilter((prev) => {
       const target = prev === nextStatus && nextStatus !== 'TODOS' ? 'TODOS' : nextStatus;
@@ -58,22 +56,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     });
   };
 
-  const handleSelectRubroFaltante = (rubro: RubroCodigo) => {
-    setSelectedRubros([]);
-    setStatusFilter('TODOS');
-    setFaltanteRubroFilter((prev) => {
-      const next = prev === rubro ? null : rubro;
-      if (next) {
-        setTimeout(() => {
-          clientTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 80);
-      }
-      return next;
-    });
-  };
-
   const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
-    setFaltanteRubroFilter(null);
     setStatusFilter('TODOS');
     setSelectedRubros((prev) => {
       const yaEsta = prev.includes(rubro);
@@ -281,23 +264,6 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     }
   };
 
-  // Métricas por rubro (Cartera vs Activos vs Faltantes por vender)
-  const rubroCarteraMetrics = useMemo(() => {
-    return RUBROS_ACTIVACION.map((rCode) => {
-      const activosRubro = clientList.filter((c) => clienteActivoEnRubro(c, rCode)).length;
-      const faltanRubro = Math.max(0, totalClientes - activosRubro);
-      const pctRubro = totalClientes > 0 ? (activosRubro / totalClientes) * 100 : 0;
-      return {
-        rCode,
-        label: RUBRO_LABEL[rCode],
-        cartera: totalClientes,
-        activos: activosRubro,
-        faltan: faltanRubro,
-        porcentaje: pctRubro,
-      };
-    });
-  }, [clientList, totalClientes]);
-
   const displayedClients = useMemo(() => {
     const term = (searchTerm || '').trim().toLowerCase();
     return clientList
@@ -308,9 +274,6 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         return nameMatch || codeMatch;
       })
       .filter(c => {
-        if (faltanteRubroFilter) {
-          return !clienteActivoEnRubro(c, faltanteRubroFilter);
-        }
         if (statusFilter === 'FALTANTES') {
           return c.cobertura === 0;
         }
@@ -328,7 +291,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         }
         return viewMode === 'personal' ? c.cobertura < 5 : true;
       });
-  }, [clientList, searchTerm, viewMode, selectedRubros, statusFilter, faltanteRubroFilter]);
+  }, [clientList, searchTerm, viewMode, selectedRubros, statusFilter]);
   
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -411,13 +374,10 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
       selectedRubros.length > 0 ||
       searchTerm.trim().length > 0 ||
       viewMode === 'personal' ||
-      statusFilter !== 'TODOS' ||
-      faltanteRubroFilter !== null;
+      statusFilter !== 'TODOS';
     if (isFiltered) {
       const rubrosTxt = selectedRubros.length > 0
         ? `Rubros activos: ${selectedRubros.map(r => RUBRO_LABEL[r]).join(', ')}`
-        : faltanteRubroFilter
-        ? `Faltantes en rubro: ${RUBRO_LABEL[faltanteRubroFilter]}`
         : statusFilter === 'FALTANTES'
         ? 'Clientes Faltantes por Vender (0/5)'
         : statusFilter === 'ACTIVOS'
@@ -565,7 +525,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                   onClick={() => handleSelectMetricFilter('FALTANTES')}
                   title="Clic para filtrar los clientes que faltan por vender"
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold transition-colors cursor-pointer ${
-                    statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                    statusFilter === 'FALTANTES'
                       ? 'bg-red-600 text-white shadow'
                       : 'bg-red-950/50 text-red-400 border border-red-800/60 hover:bg-red-600 hover:text-white'
                   }`}
@@ -704,8 +664,8 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         </div>
 
         {/* Métricas Cards (Responsive Horizontal Scroll on Mobile) */}
-        <div className="p-4 md:p-5 bg-neutral-950 space-y-5">
-          <div className="flex overflow-x-auto snap-x snap-mandatory scrollbar-hide gap-3 md:gap-4 md:grid md:grid-cols-3" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="p-4 md:p-5 bg-neutral-950">
+          <div className="flex overflow-x-auto snap-x snap-mandatory scrollbar-hide gap-3 md:gap-4 md:grid md:grid-cols-2 xl:grid-cols-4" style={{ WebkitOverflowScrolling: 'touch' }}>
              
              {/* Card 1: Faltantes por activar (< 5 rubros) */}
              <div
@@ -715,7 +675,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('FALTAN_RUBROS'); } }}
                title="Clic para filtrar los clientes a los que les falta activar 1 o más rubros"
                className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
-                 statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
+                 statusFilter === 'FALTAN_RUBROS'
                    ? 'border-2 border-red-500 ring-2 ring-red-500/20 bg-gradient-to-b from-red-950/25 to-neutral-950 shadow-lg shadow-red-950/30'
                    : 'border border-neutral-800 hover:border-red-600/60 hover:bg-neutral-900/30'
                }`}
@@ -727,7 +687,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <ShieldAlert className="w-4 h-4" /> Faltantes Por Activar
                    </h4>
                    <div className="flex items-center gap-1.5">
-                     {statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter && (
+                     {statusFilter === 'FALTAN_RUBROS' && (
                        <span className="bg-red-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
                          Filtro Activo
                        </span>
@@ -763,7 +723,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('FALTANTES'); } }}
                title="Clic para filtrar los clientes que faltan por activar (0 compras)"
                className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
-                 statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                 statusFilter === 'FALTANTES'
                    ? 'border-2 border-red-500 ring-2 ring-red-500/20 bg-gradient-to-b from-red-950/25 to-neutral-950 shadow-lg shadow-red-950/30'
                    : 'border border-neutral-800 hover:border-red-600/60 hover:bg-neutral-900/30'
                }`}
@@ -775,7 +735,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <XCircle className="w-4 h-4" /> Sin Ningún Rubro (0/5)
                    </h4>
                    <div className="flex items-center gap-1.5">
-                     {statusFilter === 'FALTANTES' && !faltanteRubroFilter && (
+                     {statusFilter === 'FALTANTES' && (
                        <span className="bg-red-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
                          Filtro Activo
                        </span>
@@ -793,7 +753,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
 
                 <p className="text-[10px] md:text-xs font-sans text-neutral-400 mb-4 mt-1 leading-tight relative z-10">
-                   Atención prioritaria: clientes con 0 compras en la temporada (toca para filtrar faltantes)
+                   Atención prioritaria: clientes con 0 compras en la temporada (toca para filtrar)
                 </p>
 
                 <div className="mt-auto relative z-10">
@@ -811,7 +771,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('CINCO_RUBROS'); } }}
                title="Clic para filtrar los clientes 100% activados (5/5 rubros)"
                className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
-                 statusFilter === 'CINCO_RUBROS' && !faltanteRubroFilter
+                 statusFilter === 'CINCO_RUBROS'
                    ? 'border-2 border-emerald-500 ring-2 ring-emerald-500/20 bg-gradient-to-b from-emerald-950/25 to-neutral-950 shadow-lg shadow-emerald-950/30'
                    : 'border border-neutral-800 hover:border-emerald-600/60 hover:bg-neutral-900/30'
                }`}
@@ -823,7 +783,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <CheckCircle2 className="w-4 h-4" /> 100% Activados (5/5)
                    </h4>
                    <div className="flex items-center gap-1.5">
-                     {statusFilter === 'CINCO_RUBROS' && !faltanteRubroFilter && (
+                     {statusFilter === 'CINCO_RUBROS' && (
                        <span className="bg-emerald-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
                          Filtro Activo
                        </span>
@@ -851,228 +811,54 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
              </div>
 
-          </div>
+             {/* Card 4: Cartera vs Faltantes por Activar (Activación General) */}
+             <div
+               role="button"
+               tabIndex={0}
+               onClick={() => handleSelectMetricFilter('FALTANTES')}
+               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('FALTANTES'); } }}
+               title="Clic para filtrar los clientes que faltan por activar"
+               className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
+                 statusFilter === 'FALTANTES'
+                   ? 'border-2 border-amber-500 ring-2 ring-amber-500/20 bg-gradient-to-b from-amber-950/25 to-neutral-950 shadow-lg shadow-amber-950/30'
+                   : 'border border-neutral-800 hover:border-amber-600/60 hover:bg-neutral-900/30'
+               }`}
+             >
+                <div className="absolute -left-10 -bottom-10 w-32 h-32 bg-amber-900/5 rounded-full blur-2xl"></div>
 
-          {/* TABLA DE MÉTRICAS: CARTERA DE CLIENTES VS LO QUE FALTA POR ACTIVAR */}
-          <div className="border border-neutral-800 rounded-xl overflow-hidden bg-neutral-900/20">
-            <div className="p-3.5 md:p-4 border-b border-neutral-800 bg-neutral-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-red-500 shrink-0" />
-                <div>
-                  <h4 className="text-xs md:text-sm font-sans font-bold text-white uppercase tracking-wider">
-                    Tabla de Métricas: Cartera de Clientes vs Faltantes por Activar
-                  </h4>
-                  <p className="text-[10px] md:text-xs font-sans text-neutral-400">
-                    Selecciona cualquier métrica o botón <span className="text-red-400 font-bold">“Filtrar Faltantes”</span> para ver abajo únicamente los clientes que te faltan por vender.
-                  </p>
+                <div className="flex justify-between items-start mb-4 relative z-10">
+                   <h4 className="text-xs font-sans font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                     <Users className="w-4 h-4" /> Cartera vs Faltan
+                   </h4>
+                   <div className="flex items-center gap-1.5">
+                     {statusFilter === 'FALTANTES' && (
+                       <span className="bg-amber-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
+                         Filtro Activo
+                       </span>
+                     )}
+                     <div className="bg-amber-950/40 border border-amber-900/50 text-amber-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
+                       {totalClientes > 0 ? Math.round((faltan / totalClientes) * 100) : 0}% Faltan
+                     </div>
+                   </div>
                 </div>
-              </div>
-              {(statusFilter !== 'TODOS' || faltanteRubroFilter !== null) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStatusFilter('TODOS');
-                    setFaltanteRubroFilter(null);
-                  }}
-                  className="self-start sm:self-auto px-3 py-1.5 rounded-lg text-[11px] font-sans font-bold bg-neutral-800 hover:bg-neutral-700 text-white border border-neutral-600 transition-colors cursor-pointer shrink-0"
-                >
-                  Mostrar Cartera Completa ({totalClientes})
-                </button>
-              )}
-            </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[720px]">
-                <thead>
-                  <tr className="bg-neutral-900 border-b border-neutral-800 text-[10px] md:text-xs font-sans text-neutral-400 uppercase tracking-wider">
-                    <th className="p-3 font-bold text-white border-r border-neutral-800">Métrica / Rubro</th>
-                    <th className="p-3 font-bold text-center border-r border-neutral-800 w-32">Clientes en Cartera</th>
-                    <th className="p-3 font-bold text-center text-emerald-400 border-r border-neutral-800 w-32">Ya Activados</th>
-                    <th className="p-3 font-bold text-center text-red-400 border-r border-neutral-800 w-36">Faltan por Activar</th>
-                    <th className="p-3 font-bold text-center border-r border-neutral-800 w-32">% Avance</th>
-                    <th className="p-3 font-bold text-center w-44">Acción / Filtro Rápido</th>
-                  </tr>
-                </thead>
-                <tbody className="text-xs font-mono">
-                  {/* Fila Principal: ACTIVACIÓN GENERAL DE CARTERA */}
-                  <tr
-                    onClick={() => handleSelectMetricFilter('FALTANTES')}
-                    title="Clic para filtrar los clientes que faltan por vender (0 compras)"
-                    className={`border-b border-neutral-800 cursor-pointer transition-colors ${
-                      statusFilter === 'FALTANTES' && !faltanteRubroFilter
-                        ? 'bg-red-950/35 hover:bg-red-950/45'
-                        : 'bg-neutral-950 hover:bg-neutral-900/60'
-                    }`}
-                  >
-                    <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-red-500 shrink-0" />
-                        <div>
-                          <div className="uppercase tracking-wide">Activación General (Cartera Total vs Faltantes)</div>
-                          <div className="text-[10px] font-normal text-neutral-400">Clientes con al menos 1 compra vs clientes en 0 compras</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-3 text-center font-bold text-white border-r border-neutral-800 text-sm">
-                      {totalClientes} <span className="text-[10px] font-sans font-normal text-neutral-500">cli</span>
-                    </td>
-                    <td
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSelectMetricFilter('ACTIVOS');
-                      }}
-                      title="Clic para ver solo los clientes ya activados"
-                      className="p-3 text-center font-bold text-emerald-400 border-r border-neutral-800 text-sm hover:bg-emerald-950/30"
-                    >
-                      {activos} <span className="text-[10px] font-sans font-normal text-neutral-400">cli</span>
-                    </td>
-                    <td className="p-3 text-center font-extrabold text-red-400 border-r border-neutral-800 text-sm bg-red-950/15">
-                      {faltan} <span className="text-[10px] font-sans font-normal text-red-300">faltan</span>
-                    </td>
-                    <td className="p-3 text-center border-r border-neutral-800">
-                      <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${porcentaje >= 80 ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-amber-900/50 bg-amber-950/40 text-amber-400'}`}>
-                        {porcentaje.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="p-3 text-center font-sans">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectMetricFilter('FALTANTES');
-                        }}
-                        className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
-                          statusFilter === 'FALTANTES' && !faltanteRubroFilter
-                            ? 'bg-red-600 text-white border-red-400 shadow-[0_0_12px_rgba(220,38,38,0.45)]'
-                            : 'bg-red-950/40 hover:bg-red-600 text-red-300 hover:text-white border-red-800/70'
-                        }`}
-                      >
-                        <XCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>{statusFilter === 'FALTANTES' && !faltanteRubroFilter ? `Mostrando Faltantes (${faltan})` : `Ver Faltantes (${faltan})`}</span>
-                      </button>
-                    </td>
-                  </tr>
+                <div className="mb-2 relative z-10">
+                   <div className="text-3xl md:text-4xl font-mono text-amber-400 font-bold tracking-tight">
+                     {faltan} <span className="text-xs md:text-sm text-white font-sans font-normal">de {totalClientes} clientes</span>
+                   </div>
+                </div>
 
-                  {/* Fila Secundaria: FALTANTES POR COMPLETAR 5 RUBROS */}
-                  <tr
-                    onClick={() => handleSelectMetricFilter('FALTAN_RUBROS')}
-                    title="Clic para filtrar los clientes a los que aún les falta algún rubro (< 5 rubros)"
-                    className={`border-b border-neutral-800 cursor-pointer transition-colors ${
-                      statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
-                        ? 'bg-amber-950/30 hover:bg-amber-950/40'
-                        : 'bg-neutral-950/60 hover:bg-neutral-900/60'
-                    }`}
-                  >
-                    <td className="p-3 font-sans font-bold text-neutral-200 border-r border-neutral-800">
-                      <div className="flex items-center gap-2">
-                        <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div>
-                          <div className="uppercase tracking-wide">Cobertura Completa 5/5 vs Con Rubros Pendientes</div>
-                          <div className="text-[10px] font-normal text-neutral-400">Clientes con los 5 rubros vs clientes que les falta 1 o más rubros</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-3 text-center font-bold text-white border-r border-neutral-800">
-                      {totalClientes} <span className="text-[10px] font-sans font-normal text-neutral-500">cli</span>
-                    </td>
-                    <td
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSelectMetricFilter('CINCO_RUBROS');
-                      }}
-                      title="Clic para ver clientes con los 5 rubros completos"
-                      className="p-3 text-center font-bold text-emerald-400 border-r border-neutral-800 hover:bg-emerald-950/30"
-                    >
-                      {cienPorCientoActivados} <span className="text-[10px] font-sans font-normal text-neutral-400">(5/5)</span>
-                    </td>
-                    <td className="p-3 text-center font-bold text-amber-400 border-r border-neutral-800 bg-amber-950/10">
-                      {faltantesPorActivar} <span className="text-[10px] font-sans font-normal text-amber-300">(&lt;5 rubros)</span>
-                    </td>
-                    <td className="p-3 text-center border-r border-neutral-800">
-                      <span className="px-2 py-0.5 rounded border border-neutral-700 bg-neutral-900 text-neutral-300 text-[11px] font-bold">
-                        {totalClientes > 0 ? ((cienPorCientoActivados / totalClientes) * 100).toFixed(1) : '0.0'}%
-                      </span>
-                    </td>
-                    <td className="p-3 text-center font-sans">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectMetricFilter('FALTAN_RUBROS');
-                        }}
-                        className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
-                          statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
-                            ? 'bg-amber-600 text-white border-amber-400'
-                            : 'bg-amber-950/40 hover:bg-amber-600 text-amber-300 hover:text-white border-amber-800/70'
-                        }`}
-                      >
-                        <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                        <span>{statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter ? `Mostrando (${faltantesPorActivar})` : `Ver <5 Rubros (${faltantesPorActivar})`}</span>
-                      </button>
-                    </td>
-                  </tr>
+                <p className="text-[10px] md:text-xs font-sans text-neutral-400 mb-4 mt-1 leading-tight relative z-10">
+                   Activados: <strong className="text-emerald-400">{activos} cli ({porcentaje.toFixed(1)}%)</strong> · Faltan por vender: <strong className="text-red-400">{faltan} cli</strong> (toca para filtrar)
+                </p>
 
-                  {/* Desglose por cada uno de los 5 Rubros (Cartera vs Activos vs Faltan en ese rubro) */}
-                  {rubroCarteraMetrics.map((rm) => {
-                    const isSelectedFaltante = faltanteRubroFilter === rm.rCode;
-                    const rTheme = getRubroTheme(rm.rCode);
-                    const IconComp = rTheme.icon;
-                    return (
-                      <tr
-                        key={rm.rCode}
-                        onClick={() => handleSelectRubroFaltante(rm.rCode)}
-                        title={`Clic para filtrar los ${rm.faltan} clientes que faltan por comprar ${rm.label}`}
-                        className={`border-b border-neutral-800/70 cursor-pointer transition-colors ${
-                          isSelectedFaltante ? 'bg-red-950/30 hover:bg-red-950/40' : 'hover:bg-neutral-900/50'
-                        }`}
-                      >
-                        <td className="p-2.5 pl-4 font-sans font-bold text-neutral-300 border-r border-neutral-800">
-                          <div className="flex items-center gap-2">
-                            <IconComp className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                            <span>Rubro: <strong className="text-white">{rm.label}</strong></span>
-                          </div>
-                        </td>
-                        <td className="p-2.5 text-center text-neutral-300 border-r border-neutral-800">
-                          {rm.cartera} <span className="text-[10px] font-sans text-neutral-500">cli</span>
-                        </td>
-                        <td
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleRubro360(rm.rCode, false);
-                          }}
-                          title={`Clic para ver los ${rm.activos} clientes activos en ${rm.label}`}
-                          className="p-2.5 text-center font-bold text-emerald-400 border-r border-neutral-800 hover:bg-emerald-950/30"
-                        >
-                          {rm.activos} <span className="text-[10px] font-sans font-normal text-neutral-400">activos</span>
-                        </td>
-                        <td className="p-2.5 text-center font-bold text-red-400 border-r border-neutral-800 bg-red-950/10">
-                          {rm.faltan} <span className="text-[10px] font-sans font-normal text-red-300">faltan</span>
-                        </td>
-                        <td className="p-2.5 text-center border-r border-neutral-800">
-                          <span className="text-[11px] font-bold text-neutral-300">{rm.porcentaje.toFixed(1)}%</span>
-                        </td>
-                        <td className="p-2.5 text-center font-sans">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSelectRubroFaltante(rm.rCode);
-                            }}
-                            className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all cursor-pointer ${
-                              isSelectedFaltante
-                                ? 'bg-red-600 text-white border-red-400'
-                                : 'bg-neutral-900 hover:bg-red-950/60 text-neutral-300 hover:text-red-200 border-neutral-700 hover:border-red-700'
-                            }`}
-                          >
-                            <span>{isSelectedFaltante ? `Ocultar Faltantes (${rm.faltan})` : `Filtrar Faltantes (${rm.faltan})`}</span>
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                <div className="mt-auto relative z-10">
+                   <div className="w-full bg-neutral-900 rounded-full h-1.5 overflow-hidden border border-neutral-800">
+                      <div className="bg-amber-500 h-full rounded-full" style={{ width: `${totalClientes > 0 ? Math.min(100, (faltan / totalClientes) * 100) : 0}%` }}></div>
+                   </div>
+                </div>
+             </div>
+
           </div>
         </div>
 
@@ -1151,16 +937,12 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            </div>
          )}
 
-         {(statusFilter !== 'TODOS' || faltanteRubroFilter !== null) && (
+         {statusFilter !== 'TODOS' && (
            <div className="px-4 py-2.5 bg-red-950/30 border-b border-red-900/50 flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
              <div className="flex flex-wrap items-center gap-2 text-red-200">
                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
                <span>
-                 {faltanteRubroFilter ? (
-                   <>
-                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes que <strong>faltan por vender en {RUBRO_LABEL[faltanteRubroFilter]}</strong>
-                   </>
-                 ) : statusFilter === 'FALTANTES' ? (
+                 {statusFilter === 'FALTANTES' ? (
                    <>
                      Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes que <strong>faltan por activar / vender (0 compras)</strong>
                    </>
@@ -1181,10 +963,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
              </div>
              <button
                type="button"
-               onClick={() => {
-                 setStatusFilter('TODOS');
-                 setFaltanteRubroFilter(null);
-               }}
+               onClick={() => setStatusFilter('TODOS')}
                className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 transition-colors cursor-pointer"
              >
                Quitar filtro · Ver todos ({totalClientes})
