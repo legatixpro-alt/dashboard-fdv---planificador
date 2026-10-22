@@ -3,11 +3,21 @@ import autoTable from 'jspdf-autotable';
 import React, { useMemo, useRef, useState } from 'react';
 import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
-import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2, TriangleAlert, User, LayoutList, FileText, Grip, Zap, Activity, CheckSquare, Square } from 'lucide-react';
+import { Search, Users, CalendarDays, Target, ShieldAlert, XCircle, CheckCircle2, TriangleAlert, User, LayoutList, FileText, Grip, Zap, Activity, CheckSquare, Square, X, Filter } from 'lucide-react';
 import { RUBROS_ACTIVACION, RUBRO_LABEL, RubroCodigo } from '../lib/rubros';
 import { Rubro360Panel } from './Rubro360Panel';
 import { getRubroTheme } from './RubroDashboard360';
 import { toggleClienteRubro } from '../services/googleSheetsService';
+
+const normSearch = (val: string) =>
+  String(val || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const normClientCode = (val: string) =>
+  normSearch(val).replace(/^[#0\s]+/, '');
 
 const MANUAL_RUBROS_STORAGE_KEY = 'fdv_manual_rubros_v1';
 
@@ -35,6 +45,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const [searchTerm, setSearchTerm] = React.useState('');
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
   const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
+  const [rubroFilterMode, setRubroFilterMode] = useState<'ACTIVOS' | 'FALTANTES'>('ACTIVOS');
   const [statusFilter, setStatusFilter] = useState<'TODOS' | 'ACTIVOS' | 'FALTANTES' | 'FALTAN_RUBROS' | 'CINCO_RUBROS'>('TODOS');
   const [manualOverrides, setManualOverrides] = useState<ManualRubrosMap>(() => loadManualRubros());
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
@@ -47,6 +58,9 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     setSelectedRubros([]);
     setStatusFilter((prev) => {
       const target = prev === nextStatus && nextStatus !== 'TODOS' ? 'TODOS' : nextStatus;
+      if (target === 'TODOS' && viewMode === 'personal') {
+        setViewMode('listado');
+      }
       if (scrollToTable && target !== 'TODOS') {
         setTimeout(() => {
           clientTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -57,7 +71,9 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   };
 
   const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
-    setStatusFilter('TODOS');
+    if (viewMode === 'personal') {
+      setViewMode('listado');
+    }
     setSelectedRubros((prev) => {
       const yaEsta = prev.includes(rubro);
       const next = (yaEsta ? prev.filter((r) => r !== rubro) : [...prev, rubro]).sort(
@@ -264,34 +280,63 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     }
   };
 
+  const rubroSelectionCounts = useMemo(() => {
+    if (selectedRubros.length === 0) return { activos: 0, faltantes: 0 };
+    let activosCount = 0;
+    let faltantesCount = 0;
+    clientList.forEach((c) => {
+      if (selectedRubros.some((r) => clienteActivoEnRubro(c, r))) {
+        activosCount++;
+      }
+      if (selectedRubros.some((r) => !clienteActivoEnRubro(c, r))) {
+        faltantesCount++;
+      }
+    });
+    return { activos: activosCount, faltantes: faltantesCount };
+  }, [clientList, selectedRubros]);
+
   const displayedClients = useMemo(() => {
-    const term = (searchTerm || '').trim().toLowerCase();
+    const term = normSearch(searchTerm);
+    const termCode = normClientCode(searchTerm);
+
     return clientList
-      .filter(c => {
+      .filter((c) => {
         if (!term) return true;
-        const nameMatch = (c.razonSocial || '').toLowerCase().includes(term);
-        const codeMatch = (c.codigo || '').toLowerCase().includes(term);
+        const nameMatch = normSearch(c.razonSocial || '').includes(term);
+        const codeMatch =
+          normSearch(c.codigo || '').includes(term) ||
+          (termCode.length > 0 && normClientCode(c.codigo || '').includes(termCode));
         return nameMatch || codeMatch;
       })
-      .filter(c => {
-        if (statusFilter === 'FALTANTES') {
+      .filter((c) => {
+        // 1. Filtro por rubro(s) seleccionado(s) en 360°
+        if (selectedRubros.length > 0) {
+          const matchesRubro =
+            rubroFilterMode === 'FALTANTES'
+              ? selectedRubros.some((r) => !clienteActivoEnRubro(c, r))
+              : selectedRubros.some((r) => clienteActivoEnRubro(c, r));
+          if (!matchesRubro) return false;
+        }
+
+        // 2. Filtro por estado general de cobertura
+        const effectiveStatus =
+          viewMode === 'personal' && statusFilter === 'TODOS' ? 'FALTAN_RUBROS' : statusFilter;
+
+        if (effectiveStatus === 'FALTANTES') {
           return c.cobertura === 0;
         }
-        if (statusFilter === 'ACTIVOS') {
+        if (effectiveStatus === 'ACTIVOS') {
           return c.cobertura > 0;
         }
-        if (statusFilter === 'FALTAN_RUBROS') {
+        if (effectiveStatus === 'FALTAN_RUBROS') {
           return c.cobertura < 5;
         }
-        if (statusFilter === 'CINCO_RUBROS') {
+        if (effectiveStatus === 'CINCO_RUBROS') {
           return c.cobertura === 5;
         }
-        if (selectedRubros.length > 0) {
-          return selectedRubros.some((r) => clienteActivoEnRubro(c, r));
-        }
-        return viewMode === 'personal' ? c.cobertura < 5 : true;
+        return true;
       });
-  }, [clientList, searchTerm, viewMode, selectedRubros, statusFilter]);
+  }, [clientList, searchTerm, viewMode, selectedRubros, rubroFilterMode, statusFilter]);
   
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -518,8 +563,20 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
               <div className="text-3xl sm:text-4xl font-mono text-white font-bold tracking-tight">
                 {activos} <span className="text-base sm:text-lg text-neutral-500 font-sans font-normal">/ {totalClientes} cli</span>
               </div>
-              <div className="text-xs font-sans text-neutral-400 mt-1 flex flex-wrap items-center gap-2">
-                <span>Faltan por activar:</span>
+              <div className="text-xs font-sans text-neutral-400 mt-1.5 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleSelectMetricFilter('ACTIVOS')}
+                  title="Clic para filtrar los clientes ya activados"
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold transition-colors cursor-pointer ${
+                    statusFilter === 'ACTIVOS'
+                      ? 'bg-emerald-600 text-white shadow'
+                      : 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/60 hover:bg-emerald-600 hover:text-white'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Activos: {activos}</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => handleSelectMetricFilter('FALTANTES')}
@@ -531,7 +588,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                   }`}
                 >
                   <XCircle className="w-3 h-3" />
-                  <span>{faltan} clientes (ver faltantes)</span>
+                  <span>Faltan: {faltan} clientes</span>
                 </button>
               </div>
             </div>
@@ -620,13 +677,31 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
           {/* Toggle Controls */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
              <div className="flex bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden shrink-0">
-                 <button onClick={() => setViewMode('personal')} className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors border-r ${viewMode === 'personal' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     setViewMode('personal');
+                     setStatusFilter('FALTAN_RUBROS');
+                   }}
+                   className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors border-r cursor-pointer ${viewMode === 'personal' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}
+                 >
                    <User className="w-3.5 h-3.5" /> Vista Personal
                  </button>
-                 <button onClick={() => setViewMode('listado')} className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors border-r ${viewMode === 'listado' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     setViewMode('listado');
+                     if (statusFilter === 'FALTAN_RUBROS') setStatusFilter('TODOS');
+                   }}
+                   className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors border-r cursor-pointer ${viewMode === 'listado' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}
+                 >
                    <LayoutList className="w-3.5 h-3.5" /> Listado
                  </button>
-                 <button onClick={() => setViewMode('tarjetas')} className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors ${viewMode === 'tarjetas' ? 'font-bold text-white bg-red-600' : 'text-neutral-400 hover:text-white'}`}>
+                 <button
+                   type="button"
+                   onClick={() => setViewMode('tarjetas')}
+                   className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 md:px-4 py-2 md:py-1.5 text-[10px] md:text-xs font-sans transition-colors cursor-pointer ${viewMode === 'tarjetas' ? 'font-bold text-white bg-red-600' : 'text-neutral-400 hover:text-white'}`}
+                 >
                    <Grip className="w-3.5 h-3.5" /> Tarjetas
                  </button>
              </div>
@@ -635,13 +710,23 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                      <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
                      <input 
                          type="text" 
-                         placeholder="Buscar cliente..." 
-                         className="w-full sm:w-56 md:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-4 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
+                         placeholder="Buscar cliente o código..." 
+                         className="w-full sm:w-56 md:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-8 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
                          value={searchTerm}
                          onChange={(e) => setSearchTerm(e.target.value)}
                      />
+                     {searchTerm && (
+                       <button
+                         type="button"
+                         onClick={() => setSearchTerm('')}
+                         title="Limpiar búsqueda"
+                         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white transition-colors cursor-pointer"
+                       >
+                         <X className="w-3.5 h-3.5" />
+                       </button>
+                     )}
                  </div>
-                 <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors">
+                 <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors cursor-pointer">
                      <FileText className="w-3.5 h-3.5" /> PDF
                  </button>
              </div>
@@ -904,6 +989,86 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            </div>
          </div>
 
+         {/* Barra de filtros rápidos por Estado de Cartera */}
+         <div className="px-4 py-2.5 bg-neutral-900/40 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2">
+           <div className="flex flex-wrap items-center gap-1.5">
+             <span className="text-[10px] font-sans font-bold text-neutral-500 uppercase tracking-wider mr-1 flex items-center gap-1">
+               <Filter className="w-3 h-3 text-red-500" /> Filtrar Cartera:
+             </span>
+             <button
+               type="button"
+               onClick={() => handleSelectMetricFilter('TODOS', false)}
+               className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                 statusFilter === 'TODOS' && viewMode !== 'personal'
+                   ? 'bg-neutral-200 text-black border-white'
+                   : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-white'
+               }`}
+             >
+               Todos ({totalClientes})
+             </button>
+             <button
+               type="button"
+               onClick={() => handleSelectMetricFilter('ACTIVOS', false)}
+               className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                 statusFilter === 'ACTIVOS'
+                   ? 'bg-emerald-600 text-white border-emerald-500'
+                   : 'bg-neutral-900 text-emerald-400/90 border-neutral-800 hover:border-emerald-700/60'
+               }`}
+             >
+               Activos ≥1 ({activos})
+             </button>
+             <button
+               type="button"
+               onClick={() => handleSelectMetricFilter('FALTANTES', false)}
+               className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                 statusFilter === 'FALTANTES'
+                   ? 'bg-red-600 text-white border-red-500'
+                   : 'bg-neutral-900 text-red-400/90 border-neutral-800 hover:border-red-700/60'
+               }`}
+             >
+               Faltan Vender 0/5 ({faltan})
+             </button>
+             <button
+               type="button"
+               onClick={() => handleSelectMetricFilter('FALTAN_RUBROS', false)}
+               className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                 statusFilter === 'FALTAN_RUBROS' || viewMode === 'personal'
+                   ? 'bg-amber-600 text-white border-amber-500'
+                   : 'bg-neutral-900 text-amber-400/90 border-neutral-800 hover:border-amber-700/60'
+               }`}
+             >
+               Faltan Rubros &lt;5 ({faltantesPorActivar})
+             </button>
+             <button
+               type="button"
+               onClick={() => handleSelectMetricFilter('CINCO_RUBROS', false)}
+               className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                 statusFilter === 'CINCO_RUBROS'
+                   ? 'bg-teal-600 text-white border-teal-500'
+                   : 'bg-neutral-900 text-teal-400/90 border-neutral-800 hover:border-teal-700/60'
+               }`}
+             >
+               100% Activados 5/5 ({cienPorCientoActivados})
+             </button>
+           </div>
+
+           {(searchTerm.trim() !== '' || statusFilter !== 'TODOS' || selectedRubros.length > 0 || viewMode === 'personal') && (
+             <button
+               type="button"
+               onClick={() => {
+                 setSearchTerm('');
+                 setStatusFilter('TODOS');
+                 setSelectedRubros([]);
+                 setRubroFilterMode('ACTIVOS');
+                 if (viewMode === 'personal') setViewMode('listado');
+               }}
+               className="px-2.5 py-1 rounded-md text-[11px] font-sans font-bold bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors cursor-pointer flex items-center gap-1"
+             >
+               <X className="w-3 h-3" /> Limpiar filtros ({displayedClients.length}/{totalClientes})
+             </button>
+           )}
+         </div>
+
          {selectedRubros.length > 0 && (
            <div ref={dashboard360Ref} className="p-4 border-b border-neutral-800 bg-black/50 animate-in fade-in slide-in-from-top-2 duration-300">
              <Rubro360Panel
@@ -920,19 +1085,47 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
          {selectedRubros.length > 0 && (
            <div className="px-4 py-2.5 bg-emerald-950/25 border-b border-emerald-900/40 flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
-             <div className="flex flex-wrap items-center gap-1.5 text-emerald-300">
+             <div className="flex flex-wrap items-center gap-2 text-emerald-300">
                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                <span>
-                 Mostrando <strong>{displayedClients.length}</strong> {displayedClients.length === 1 ? 'cliente activo' : 'clientes activos'} en:{' '}
+                 Mostrando <strong>{displayedClients.length}</strong>{' '}
+                 {rubroFilterMode === 'FALTANTES' ? 'clientes que faltan por activar en:' : 'clientes activos en:'}{' '}
                  <strong>{selectedRubros.map((r) => RUBRO_LABEL[r]).join(', ')}</strong>
                </span>
+               <div className="inline-flex rounded-md overflow-hidden border border-neutral-700 ml-1">
+                 <button
+                   type="button"
+                   onClick={() => setRubroFilterMode('ACTIVOS')}
+                   className={`px-2 py-0.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                     rubroFilterMode === 'ACTIVOS'
+                       ? 'bg-emerald-600 text-white'
+                       : 'bg-neutral-900 text-neutral-400 hover:text-white'
+                   }`}
+                 >
+                   Activos en rubro ({rubroSelectionCounts.activos})
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => setRubroFilterMode('FALTANTES')}
+                   className={`px-2 py-0.5 text-[11px] font-bold transition-colors border-l border-neutral-700 cursor-pointer ${
+                     rubroFilterMode === 'FALTANTES'
+                       ? 'bg-red-600 text-white'
+                       : 'bg-neutral-900 text-neutral-400 hover:text-white'
+                   }`}
+                 >
+                   Faltantes en rubro ({rubroSelectionCounts.faltantes})
+                 </button>
+               </div>
              </div>
              <button
                type="button"
-               onClick={() => setSelectedRubros([])}
+               onClick={() => {
+                 setSelectedRubros([]);
+                 setRubroFilterMode('ACTIVOS');
+               }}
                className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 transition-colors cursor-pointer"
              >
-               Ver todos los clientes ({totalClientes})
+               Quitar filtro de rubro ({totalClientes})
              </button>
            </div>
          )}

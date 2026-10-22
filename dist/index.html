@@ -1,25 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#dc2626" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FDV Cobros" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>Dashboard FDV - Planificador</title>
-    <meta name="description" content="Dashboard de Fuerza de Ventas con módulo de Planificación de Rutas." />
+    <meta name="description" content="Dashboard de Fuerza de Ventas con módulo de Planificación de Rutas y recepción de Cobros desde WhatsApp." />
     <meta property="og:title" content="Dashboard FDV - Planificador" />
     <meta property="og:description" content="Dashboard de Fuerza de Ventas con módulo de Planificación de Rutas." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script type="module" crossorigin src="/assets/index-C7uZHYyv.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/vendor-icons-Da3DR90j.js">
-    <link rel="modulepreload" crossorigin href="/assets/vendor-react-DnJ73jBT.js">
-    <link rel="modulepreload" crossorigin href="/assets/vendor-pdf-CJA2QyCY.js">
+    <script>
+      window.__fdvDeferredInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__fdvDeferredInstallPrompt = e;
+        window.dispatchEvent(new Event('fdv-install-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__fdvDeferredInstallPrompt = null;
+        window.dispatchEvent(new Event('fdv-app-installed'));
+      });
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function (err) {
+            console.warn('SW registration warning:', err);
+          });
+        });
+      }
+    </script>
+    <script type="module" crossorigin src="/assets/index-CCylEpR-.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-icons-B-6IYs0T.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-BN1LuefN.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-pdf-CgckCb__.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-supabase-D_iOwayF.js">
     <link rel="modulepreload" crossorigin href="/assets/vendor-firebase-DG_Ws1Sq.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-DDk6y3MF.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-Ckk8oxw9.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
   </body>
 </html>
-

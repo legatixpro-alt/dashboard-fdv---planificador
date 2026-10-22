@@ -2919,9 +2919,30 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     return names;
   }
 
+  let histCarteraCache: { rows: { cod: string; vend: string }[]; time: number } | null = null;
+  async function histGetCarteraVendorMap(): Promise<{ cod: string; vend: string }[]> {
+    if (histCarteraCache && Date.now() - histCarteraCache.time < 300000) return histCarteraCache.rows;
+    const raw = await histFetchAll((a, b) => supabase!.from('activacion_clientes').select('cliente_codigo,vendedor_nombre').order('id').range(a, b));
+    const rows = raw
+      .map((r: any) => ({
+        cod: String(r.cliente_codigo || '').trim().replace(/^#/, '').replace(/^0+/, ''),
+        vend: normHist(r.vendedor_nombre)
+      }))
+      .filter((r) => r.cod && r.vend);
+    histCarteraCache = { rows, time: Date.now() };
+    return rows;
+  }
+
+  interface HistScope {
+    all: boolean;
+    names: string[];
+    aliases: string[];
+    clientIds?: Set<string>;
+  }
+
   // Devuelve los nombres de vendedor que el usuario autenticado puede ver.
   // ADMIN: todo o la ruta/supervisor pedido. SUPERVISOR: su equipo o un vendedor de su equipo. VENDEDOR: únicamente sus propias rutas.
-  async function histResolveScope(req: any): Promise<{ all: boolean; names: string[]; aliases: string[] }> {
+  async function histResolveScope(req: any): Promise<HistScope> {
     const user = req.user || {};
     const supProfile = getSupervisorProfile(user.username);
     const role = supProfile ? 'SUPERVISOR' : String(user.role || '').toUpperCase();
@@ -2940,18 +2961,45 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       return null;
     };
 
+    const enrichNewVendorScope = async (names: string[], aliases: string[], isSupervisorScope = false): Promise<HistScope> => {
+      if (names.length > 0) return { all: false, names, aliases };
+      // Para el supervisor Alí Pérez consolidado, en ventas_historial los registros están bajo "ALI PEREZ"
+      if (isSupervisorScope) {
+        const supHistNames = toNames([...aliases, 'ALI PEREZ']);
+        return { all: false, names: supHistNames, aliases };
+      }
+      // Para vendedores nuevos de la zona de Alí Pérez (Ángel Navarro, Mariangel González, Víctor Campos),
+      // filtramos el historial real de sus clientes asignados actualmente en activacion_clientes.
+      const aliasSet = new Set(aliases);
+      const carteraRows = await histGetCarteraVendorMap();
+      const clientIds = new Set<string>();
+      carteraRows.forEach((r) => {
+        if (aliasSet.has(r.vend)) clientIds.add(r.cod);
+      });
+      if (clientIds.size > 0) {
+        const aliHistNames = toNames(['ALI PEREZ', ...aliases]);
+        if (aliHistNames.length > 0) {
+          return { all: false, names: aliHistNames, aliases, clientIds };
+        }
+      }
+      return { all: false, names, aliases };
+    };
+
     if (role === 'ADMIN') {
       if (!q || qU === 'ADMIN' || qU === 'TODOS' || qU === 'TODOS LOS VENDEDORES') return { all: true, names: [], aliases: [] };
       if (qU.startsWith('SUPERVISOR:')) {
-        const supAliases = getSupervisedAliases(q.slice('SUPERVISOR:'.length));
-        return { all: false, names: toNames(supAliases), aliases: supAliases.map(normHist) };
+        const supName = q.slice('SUPERVISOR:'.length);
+        const supAliases = getSupervisedAliases(supName);
+        return enrichNewVendorScope(toNames([...supAliases, supName]), supAliases.map(normHist), true);
       }
       if (qU.startsWith('CONSOLIDATED:')) {
         const prof = getVendorProfile(q.slice('CONSOLIDATED:'.length));
-        return { all: false, names: toNames(prof.routes.flatMap(r => r.aliases)), aliases: prof.routes.flatMap(r => [r.id, ...r.aliases]).map(normHist) };
+        const aliases = prof.routes.flatMap(r => [r.id, ...r.aliases]).map(normHist);
+        return enrichNewVendorScope(toNames(prof.routes.flatMap(r => r.aliases)), aliases);
       }
       const r = findRoute(q);
-      return { all: false, names: toNames(r ? r.aliases : [q]), aliases: (r ? [r.id, ...r.aliases] : [q]).map(normHist) };
+      const aliases = (r ? [r.id, ...r.aliases] : [q]).map(normHist);
+      return enrichNewVendorScope(toNames(r ? r.aliases : [q]), aliases);
     }
 
     if (role === 'SUPERVISOR') {
@@ -2959,19 +3007,21 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const supName = mySup?.canonicalUsername || String(user.username || '');
       const allSupAliases = getSupervisedAliases(supName);
       if (!q || qU === 'SUPERVISOR_ALL' || qU === 'ALL_MY_ROUTES' || qU.startsWith('SUPERVISOR:')) {
-        return { all: false, names: toNames(allSupAliases), aliases: allSupAliases.map(normHist) };
+        return enrichNewVendorScope(toNames([...allSupAliases, supName]), allSupAliases.map(normHist), true);
       }
       const targetVendor = q.replace(/^CONSOLIDATED:/i, '');
       const supRoutes = getSupervisedRoutes(supName);
       const matchedRoute = supRoutes.find(r => r.id === targetVendor || r.aliases.some(a => normHist(a) === normHist(targetVendor)));
       if (matchedRoute) {
-        return { all: false, names: toNames(matchedRoute.aliases), aliases: [matchedRoute.id, ...matchedRoute.aliases].map(normHist) };
+        const aliases = [matchedRoute.id, ...matchedRoute.aliases].map(normHist);
+        return enrichNewVendorScope(toNames(matchedRoute.aliases), aliases);
       }
       if (mySup?.supervisedVendors.some(v => normHist(v) === normHist(targetVendor))) {
         const prof = getVendorProfile(targetVendor);
-        return { all: false, names: toNames(prof.routes.flatMap(r => r.aliases)), aliases: prof.routes.flatMap(r => [r.id, ...r.aliases]).map(normHist) };
+        const aliases = prof.routes.flatMap(r => [r.id, ...r.aliases]).map(normHist);
+        return enrichNewVendorScope(toNames(prof.routes.flatMap(r => r.aliases)), aliases);
       }
-      return { all: false, names: toNames(allSupAliases), aliases: allSupAliases.map(normHist) };
+      return enrichNewVendorScope(toNames([...allSupAliases, supName]), allSupAliases.map(normHist), true);
     }
 
     const profile = getVendorProfile(String(user.username || ''));
@@ -2980,7 +3030,8 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const mine = routes.find(r => r.id === q || r.aliases.some(a => normHist(a) === normHist(q)));
       if (mine) routes = [mine];
     }
-    return { all: false, names: toNames(routes.flatMap(r => r.aliases)), aliases: routes.flatMap(r => [r.id, ...r.aliases]).map(normHist) };
+    const aliases = routes.flatMap(r => [r.id, ...r.aliases]).map(normHist);
+    return enrichNewVendorScope(toNames(routes.flatMap(r => r.aliases)), aliases);
   }
 
   const histCache = new Map<string, { time: number; data: any }>();
@@ -2992,10 +3043,10 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     histCache.set(key, { time: Date.now(), data });
     return data;
   };
-  const scopeKey = (s: { all: boolean; names: string[] }) => (s.all ? 'ALL' : [...s.names].sort().join('|'));
+  const scopeKey = (s: HistScope) => (s.all ? 'ALL' : [...s.names, ...(s.aliases || [])].sort().join('|'));
   const nz = (v: any) => Number(v) || 0;
 
-  async function histLoadVolumen(scope: { all: boolean; names: string[] }) {
+  async function histLoadVolumen(scope: HistScope) {
     return histCached('vol:' + scopeKey(scope), async () => {
       const merged = new Map<string, any>();
       const add = (r: any) => {
@@ -3007,6 +3058,32 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       if (scope.all) {
         const rows = await histFetchAll((a, b) => supabase!.from('hist_volumen_total_mes').select('*').order('ano').order('mes').order('id_articulo').range(a, b));
         rows.forEach(add);
+      } else if (scope.clientIds && scope.clientIds.size > 0) {
+        const rawRows = await histFetchAll((a, b) =>
+          supabase!.from('ventas_historial')
+            .select('ano,mes,id_cliente,id_articulo,articulo,rubro,cajas,unidades,kgs,monto')
+            .in('vendedor', scope.names)
+            .order('ano').order('mes').order('id_articulo').order('id_cliente')
+            .range(a, b)
+        );
+        const cliSets = new Map<string, Set<string>>();
+        rawRows.forEach((r: any) => {
+          const cid = String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '');
+          if (!scope.clientIds!.has(cid)) return;
+          const k = `${r.ano}|${r.mes}|${r.id_articulo}`;
+          let m = merged.get(k);
+          if (!m) { m = { ano: r.ano, mes: r.mes, sku: r.id_articulo, articulo: r.articulo, rubro: r.rubro, cajas: 0, unidades: 0, kgs: 0, monto: 0, clientes: 0 }; merged.set(k, m); }
+          m.cajas += nz(r.cajas); m.unidades += nz(r.unidades); m.kgs += nz(r.kgs); m.monto += nz(r.monto);
+          if (nz(r.cajas) > 0 && cid) {
+            let cs = cliSets.get(k);
+            if (!cs) { cs = new Set(); cliSets.set(k, cs); }
+            cs.add(cid);
+          }
+        });
+        cliSets.forEach((cs, k) => {
+          const m = merged.get(k);
+          if (m) m.clientes = cs.size;
+        });
       } else {
         const rows = await histFetchAll((a, b) => supabase!.from('hist_volumen_mes').select('*').in('vendedor', scope.names).order('ano').order('mes').order('vendedor').order('id_articulo').range(a, b));
         rows.forEach(add);
@@ -3055,57 +3132,89 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           m.monto[r.rubro] = (m.monto[r.rubro] || 0) + r.monto;
         });
 
-        const resumen = await histFetchAll((a, b) => {
-          let q = supabase!.from('hist_activacion_resumen_mes').select('*');
-          if (!scope.all) q = q.in('vendedor', scope.names);
-          return q.order('ano').order('mes').order('vendedor').range(a, b);
-        });
-        resumen.forEach((r: any) => {
-          const m = mesRow(r.ano, r.mes);
-          m.activos.ACEITE += nz(r.act_aceite);
-          m.activos.AZUCAR += nz(r.act_azucar);
-          m.activos.POLLO += nz(r.act_pollo);
-          m.activos.ESTANDAR_ASTURIAS += nz(r.act_estandar_asturias);
-          m.activos.MORTADELA_SALPICAO += nz(r.act_mortadela_salpicao);
-          m.activos.TOTAL += nz(r.act_total ?? r.clientes_con_compra);
-          m.clientesConMovimiento += nz(r.clientes_con_movimiento ?? r.clientes_con_compra);
-          m.fueraCartera += nz(r.clientes_fuera_cartera);
-        });
-
-        // Si las vistas en Supabase tenían filtro legacy para ESTANDAR_ASTURIAS / MORTADELA_SALPICAO,
-        // calculamos los clientes activos exactos directamente desde ventas_historial.
-        const needsEmFix = [...meses.values()].every(
-          (m: any) => m.activos.ESTANDAR_ASTURIAS === 0 && m.activos.MORTADELA_SALPICAO === 0 && ((m.cajas.ESTANDAR_ASTURIAS || 0) > 0 || (m.cajas.MORTADELA_SALPICAO || 0) > 0)
-        );
-        if (needsEmFix) {
-          const emRows = await histFetchAll((a, b) => {
-            let q = supabase!.from('ventas_historial').select('ano,mes,id_cliente,rubro,cajas').in('rubro', ['ESTANDAR_ASTURIAS', 'MORTADELA_SALPICAO']);
-            if (!scope.all) q = q.in('vendedor', scope.names);
-            return q.order('ano').order('mes').order('id_cliente').order('id_articulo').range(a, b);
-          });
-          const byMesRubCli = new Map<string, number>();
-          emRows.forEach((r: any) => {
-            const k = `${r.ano}|${r.mes}|${r.rubro}|${String(r.id_cliente || '').replace(/^0+/, '')}`;
-            byMesRubCli.set(k, (byMesRubCli.get(k) || 0) + nz(r.cajas));
-          });
-          byMesRubCli.forEach((cajasSum, key) => {
-            if (cajasSum <= 0) return;
-            const [anoS, mesS, rub] = key.split('|');
-            const m = mesRow(Number(anoS), Number(mesS));
-            if (rub === 'ESTANDAR_ASTURIAS' || rub === 'MORTADELA_SALPICAO') {
-              m.activos[rub] = (m.activos[rub] || 0) + 1;
-            }
-          });
-        }
-
-        // Tamaño de la cartera actual (base del % de activación)
         const cart = await histFetchAll((a, b) => supabase!.from('activacion_clientes').select('cliente_codigo,vendedor_nombre').order('id').range(a, b));
-        const allowed = new Set(scope.names.map(normHist));
+        const allowed = new Set([...scope.names.map(normHist), ...(scope.aliases || [])]);
         const seen = new Set<string>();
         cart.forEach((c: any) => {
           if (!scope.all && !allowed.has(normHist(c.vendedor_nombre))) return;
-          seen.add(String(c.cliente_codigo || '').replace(/^0+/, ''));
+          seen.add(String(c.cliente_codigo || '').trim().replace(/^#/, '').replace(/^0+/, ''));
         });
+
+        if (scope.clientIds && scope.clientIds.size > 0) {
+          const clientRows = await histFetchAll((a, b) =>
+            supabase!.from('ventas_historial')
+              .select('ano,mes,id_cliente,rubro,cajas')
+              .in('vendedor', scope.names)
+              .order('ano').order('mes').order('id_cliente').order('id_articulo')
+              .range(a, b)
+          );
+          const byMesCliRub = new Map<string, Record<string, number>>();
+          clientRows.forEach((r: any) => {
+            const cid = String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '');
+            if (!scope.clientIds!.has(cid)) return;
+            const mk = `${r.ano}|${r.mes}|${cid}`;
+            let obj = byMesCliRub.get(mk);
+            if (!obj) { obj = {}; byMesCliRub.set(mk, obj); }
+            obj[r.rubro] = (obj[r.rubro] || 0) + nz(r.cajas);
+            obj._ANY = (obj._ANY || 0) + nz(r.cajas);
+          });
+          byMesCliRub.forEach((obj, mk) => {
+            const [anoS, mesS] = mk.split('|');
+            const m = mesRow(Number(anoS), Number(mesS));
+            let anyKeyRub = false;
+            for (const rub of ['ACEITE', 'AZUCAR', 'POLLO', 'ESTANDAR_ASTURIAS', 'MORTADELA_SALPICAO']) {
+              if ((obj[rub] || 0) > 0) {
+                m.activos[rub] = (m.activos[rub] || 0) + 1;
+                anyKeyRub = true;
+              }
+            }
+            if (anyKeyRub) m.activos.TOTAL += 1;
+            if ((obj._ANY || 0) > 0) m.clientesConMovimiento += 1;
+          });
+        } else {
+          const resumen = await histFetchAll((a, b) => {
+            let q = supabase!.from('hist_activacion_resumen_mes').select('*');
+            if (!scope.all) q = q.in('vendedor', scope.names);
+            return q.order('ano').order('mes').order('vendedor').range(a, b);
+          });
+          resumen.forEach((r: any) => {
+            const m = mesRow(r.ano, r.mes);
+            m.activos.ACEITE += nz(r.act_aceite);
+            m.activos.AZUCAR += nz(r.act_azucar);
+            m.activos.POLLO += nz(r.act_pollo);
+            m.activos.ESTANDAR_ASTURIAS += nz(r.act_estandar_asturias);
+            m.activos.MORTADELA_SALPICAO += nz(r.act_mortadela_salpicao);
+            m.activos.TOTAL += nz(r.act_total ?? r.clientes_con_compra);
+            m.clientesConMovimiento += nz(r.clientes_con_movimiento ?? r.clientes_con_compra);
+            m.fueraCartera += nz(r.clientes_fuera_cartera);
+          });
+
+          // Si las vistas en Supabase tenían filtro legacy para ESTANDAR_ASTURIAS / MORTADELA_SALPICAO,
+          // calculamos los clientes activos exactos directamente desde ventas_historial.
+          const needsEmFix = [...meses.values()].every(
+            (m: any) => m.activos.ESTANDAR_ASTURIAS === 0 && m.activos.MORTADELA_SALPICAO === 0 && ((m.cajas.ESTANDAR_ASTURIAS || 0) > 0 || (m.cajas.MORTADELA_SALPICAO || 0) > 0)
+          );
+          if (needsEmFix) {
+            const emRows = await histFetchAll((a, b) => {
+              let q = supabase!.from('ventas_historial').select('ano,mes,id_cliente,rubro,cajas').in('rubro', ['ESTANDAR_ASTURIAS', 'MORTADELA_SALPICAO']);
+              if (!scope.all) q = q.in('vendedor', scope.names);
+              return q.order('ano').order('mes').order('id_cliente').order('id_articulo').range(a, b);
+            });
+            const byMesRubCli = new Map<string, number>();
+            emRows.forEach((r: any) => {
+              const k = `${r.ano}|${r.mes}|${r.rubro}|${String(r.id_cliente || '').replace(/^0+/, '')}`;
+              byMesRubCli.set(k, (byMesRubCli.get(k) || 0) + nz(r.cajas));
+            });
+            byMesRubCli.forEach((cajasSum, key) => {
+              if (cajasSum <= 0) return;
+              const [anoS, mesS, rub] = key.split('|');
+              const m = mesRow(Number(anoS), Number(mesS));
+              if (rub === 'ESTANDAR_ASTURIAS' || rub === 'MORTADELA_SALPICAO') {
+                m.activos[rub] = (m.activos[rub] || 0) + 1;
+              }
+            });
+          }
+        }
 
         return {
           meses: [...meses.values()].sort((a, b) => a.ano - b.ano || a.mes - b.mes),
@@ -3140,24 +3249,29 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           histFetchAll((a, b) => supabase!.from('activacion_clientes').select('cliente_codigo,vendedor_nombre').order('id').range(a, b))
         ]);
 
-        const allowed = new Set(scope.names.map(normHist));
+        const allowed = new Set([...scope.names.map(normHist), ...(scope.aliases || [])]);
         const carteraSet = new Set<string>();
         cart.forEach((c: any) => {
           if (!scope.all && !allowed.has(normHist(c.vendedor_nombre))) return;
-          carteraSet.add(String(c.cliente_codigo || '').trim().replace(/^0+/, ''));
+          carteraSet.add(String(c.cliente_codigo || '').trim().replace(/^#/, '').replace(/^0+/, ''));
         });
 
         const emByClient = new Map<string, { ESTANDAR_ASTURIAS: number; MORTADELA_SALPICAO: number }>();
         emData.forEach((r: any) => {
-          const cid = String(r.id_cliente || '').trim().replace(/^0+/, '');
+          const cid = String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '');
+          if (scope.clientIds && scope.clientIds.size > 0 && !scope.clientIds.has(cid)) return;
           let cur = emByClient.get(cid);
           if (!cur) { cur = { ESTANDAR_ASTURIAS: 0, MORTADELA_SALPICAO: 0 }; emByClient.set(cid, cur); }
           if (r.rubro === 'ESTANDAR_ASTURIAS') cur.ESTANDAR_ASTURIAS += nz(r.cajas);
           if (r.rubro === 'MORTADELA_SALPICAO') cur.MORTADELA_SALPICAO += nz(r.cajas);
         });
 
-        return data.map((r: any) => {
-          const cid = String(r.id_cliente || '').trim().replace(/^0+/, '');
+        const filteredData = (scope.clientIds && scope.clientIds.size > 0)
+          ? data.filter((r: any) => scope.clientIds!.has(String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '')))
+          : data;
+
+        return filteredData.map((r: any) => {
+          const cid = String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '');
           const em = emByClient.get(cid);
           return {
             id: r.id_cliente,
@@ -3189,6 +3303,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       const candidateIds = Array.from(new Set([rawId, id, id.padStart(6, '0'), id.padStart(5, '0'), id.padStart(4, '0')])).filter(Boolean);
       const scope = await histResolveScope(req);
       if (!scope.all && scope.names.length === 0) return res.status(404).json({ error: 'Sin acceso' });
+      if (scope.clientIds && scope.clientIds.size > 0 && !scope.clientIds.has(id)) {
+        return res.json({ meses: [], productos: [] });
+      }
 
       const meses = await histFetchAll((a, b) => {
         let q = supabase!.from('hist_activacion_cliente_mes').select('*').in('id_cliente', candidateIds);
@@ -3286,7 +3403,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
 
       // Datos crudos (se consultan una vez por rubro+alcance; cambiar el filtro de meses no vuelve a consultar la BD)
       const base = await histCached(`rub360base:${rubroCode}:${scopeKey(scope)}`, async () => {
-        const [periodos, rows, cart, metas] = await Promise.all([
+        const [periodos, rawRows, cart, metas] = await Promise.all([
           histCached('periodos', () =>
             histFetchAll((a, b) => supabase!.from('hist_periodos').select('ano,mes').order('ano').order('mes').range(a, b))
           ),
@@ -3305,6 +3422,9 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
             supabase!.from('metas_activacion').select('*').order('id').range(a, b)
           )
         ]);
+        const rows = (scope.clientIds && scope.clientIds.size > 0)
+          ? rawRows.filter((r: any) => scope.clientIds!.has(String(r.id_cliente || '').trim().replace(/^#/, '').replace(/^0+/, '')))
+          : rawRows;
         return { periodos, rows, cart, metas };
       });
 
@@ -3312,7 +3432,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         const { periodos, cart, metas } = base;
         const rows = mesesFiltro ? base.rows.filter((r: any) => mesesFiltro.has(`${r.ano}-${r.mes}`)) : base.rows;
 
-        const allowed = new Set(scope.names.map(normHist));
+        const allowed = new Set((scope.aliases && scope.aliases.length > 0) ? scope.aliases : scope.names.map(normHist));
         // activacion_clientes guarda el estado del mes en curso en has_<rubro> / cajas_<rubro>
         const isClientActiveInRubro = (c: any, rub: string): boolean => {
           switch (rub) {
@@ -4312,6 +4432,68 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     } catch(err) {
       console.error("Error in /api/data/metas-activacion:", err);
       res.status(500).json([]);
+    }
+  });
+
+  // Fallback Web Share Target endpoint (en caso de que el navegador envíe el POST directo al servidor antes de que el Service Worker lo intercepte)
+  app.post('/share-target-cobro', express.raw({ type: '*/*', limit: '25mb' }), (req: any, res: any) => {
+    try {
+      const contentType = String(req.headers['content-type'] || '');
+      const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+      const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+
+      let dataUrl = '';
+      let fileName = 'soporte_whatsapp.jpg';
+      let mimeType = 'image/jpeg';
+
+      if (boundaryMatch && rawBody.length > 0) {
+        const boundary = '--' + (boundaryMatch[1] || boundaryMatch[2]).trim();
+        const latin = rawBody.toString('latin1');
+        const parts = latin.split(boundary);
+        for (const part of parts) {
+          if (part.includes('filename=')) {
+            const fnMatch = part.match(/filename="([^"]+)"/i);
+            const ctMatch = part.match(/Content-Type:\s*([^\r\n]+)/i);
+            const headerEnd = part.indexOf('\r\n\r\n');
+            if (headerEnd !== -1) {
+              if (fnMatch && fnMatch[1]) fileName = fnMatch[1];
+              if (ctMatch && ctMatch[1]) mimeType = ctMatch[1].trim();
+              let bodyLatin = part.slice(headerEnd + 4);
+              if (bodyLatin.endsWith('\r\n')) bodyLatin = bodyLatin.slice(0, -2);
+              const fileBuf = Buffer.from(bodyLatin, 'latin1');
+              if (fileBuf.length > 0) {
+                dataUrl = `data:${mimeType};base64,${fileBuf.toString('base64')}`;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      const payloadJson = JSON.stringify({
+        dataUrl,
+        name: fileName,
+        type: mimeType,
+        timestamp: Date.now(),
+      });
+
+      res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Recibiendo comprobante de WhatsApp...</title></head>
+<body style="background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<script>
+try {
+  var payload = ${payloadJson};
+  if (payload && payload.dataUrl) {
+    localStorage.setItem('fdv_shared_whatsapp_payload', JSON.stringify(payload));
+  }
+} catch (e) {}
+window.location.replace('/?shared-receipt=1#cobros');
+</script>
+Redirigiendo al Módulo de Cobros...
+</body></html>`);
+    } catch (err) {
+      console.error('[SHARE TARGET] Error procesando archivo compartido:', err);
+      res.redirect(303, '/?shared-receipt=error#cobros');
     }
   });
 

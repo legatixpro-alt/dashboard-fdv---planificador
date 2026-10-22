@@ -30,10 +30,21 @@ export const SUPERVISOR_SUMMARY_COLUMNS = new Set([
 export function normalizeVendorName(val: string | null | undefined): string {
   if (!val) return '';
   return String(val)
+    .replace(/Ã‘|Ã±/g, 'Ñ')
     .replace(/\s+/g, ' ')
     .replace(/\s*-\s*/g, ' - ')
     .trim()
     .toUpperCase();
+}
+
+export function normalizeAsciiKey(val: string | null | undefined): string {
+  if (!val) return '';
+  return String(val)
+    .replace(/Ã‘|Ã±/g, 'N')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 // Configuración exhaustiva de perfiles y rutas asignadas a cada vendedor
@@ -309,9 +320,9 @@ export function getSupervisorProfile(username: string | null | undefined): Super
   const norm = normalizeVendorName(username).replace(/^SUPERVISOR:/, '').trim();
   if (!norm) return null;
   if (SUPERVISOR_PROFILES[norm]) return SUPERVISOR_PROFILES[norm];
-  const clean = norm.replace(/[^A-Z0-9]/g, '');
+  const clean = normalizeAsciiKey(norm);
   for (const [k, sup] of Object.entries(SUPERVISOR_PROFILES)) {
-    if (k.replace(/[^A-Z0-9]/g, '') === clean) return sup;
+    if (normalizeAsciiKey(k) === clean) return sup;
   }
   return null;
 }
@@ -354,14 +365,14 @@ export function getSupervisedAliases(supervisorUsername: string): string[] {
 export function matchesVendorAlias(aliases: string[], sheetVendor: string | null | undefined): boolean {
   const normSheet = normalizeVendorName(sheetVendor);
   if (!normSheet) return false;
-  const cleanSheet = normSheet.replace(/[^A-Z0-9]/g, '');
+  const cleanSheet = normalizeAsciiKey(normSheet);
 
   for (const a of aliases) {
     const normA = normalizeVendorName(a);
     if (!normA) continue;
     if (normSheet === normA) return true;
-    const cleanA = normA.replace(/[^A-Z0-9]/g, '');
-    if (cleanSheet === cleanA) return true;
+    const cleanA = normalizeAsciiKey(normA);
+    if (cleanSheet && cleanSheet === cleanA) return true;
   }
   return false;
 }
@@ -375,10 +386,10 @@ export function getVendorProfile(username: string): VendorProfile {
   if (VENDOR_PROFILES[normUser]) {
     return VENDOR_PROFILES[normUser];
   }
-  // Búsqueda insensible a caracteres especiales y espacios
-  const cleanUser = normUser.replace(/[^A-Z0-9]/g, '');
+  // Búsqueda insensible a caracteres especiales, tildes y espacios
+  const cleanUser = normalizeAsciiKey(normUser);
   for (const [key, prof] of Object.entries(VENDOR_PROFILES)) {
-    if (key.replace(/[^A-Z0-9]/g, '') === cleanUser) {
+    if (normalizeAsciiKey(key) === cleanUser || normalizeAsciiKey(prof.displayName) === cleanUser) {
       return prof;
     }
   }

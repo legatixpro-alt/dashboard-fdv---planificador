@@ -1,14 +1,24 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User, CheckSquare, Square } from 'lucide-react';
+import { Package, TrendingUp, Target, CalendarDays, Crosshair, LayoutGrid, Search, FileText, User, CheckSquare, Square, X, Filter } from 'lucide-react';
 import { VolumenData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
-import { MESES_CORTO } from '../lib/rubros';
+import { MESES_CORTO, RUBROS_CLAVE, RUBRO_LABEL, RubroCodigo, clasificarRubro } from '../lib/rubros';
 import { HistVolumenRow, fetchHistVolumen } from '../services/historialService';
 import { SerieVolumen, construirSerie, sumarSerie } from '../lib/volumenHistorial';
 import { MonthFilter, PeriodoMes, mesKey, resolverSeleccionMeses } from './MonthFilter';
 import { VolumenDashboard360 } from './VolumenDashboard360';
+
+const normSearch = (val: string) =>
+  String(val || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const normSkuCode = (val: string) =>
+  normSearch(val).replace(/^[#0\s]+/, '');
 
 interface Props {
   filteredVolumen: VolumenData[];
@@ -33,6 +43,8 @@ interface SkuStats {
 export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId, vendedorFilter }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'focus' | 'hoja' | 'tarjetas'>('hoja');
+  const [rubroFilter, setRubroFilter] = useState<'TODOS' | RubroCodigo>('TODOS');
+  const [statusFilter, setStatusFilter] = useState<'TODOS' | 'FALTANTES' | 'CUMPLIDOS' | 'CON_VENTA' | 'SIN_VENTA'>('TODOS');
 
   // Scaling mock data to look like the screenshot if it's less than 10k
   const scaleFactor = 1; 
@@ -185,14 +197,102 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
       serie: seriesMap.get(st.skuId) || construirSerie(st.skuId, st.articulo, histRows)
     }));
 
-  // Apply search filter
-  let filteredSkuStats = viewStats.filter(stat => 
-    (stat.skuId || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
-    (stat.articulo || '').toLowerCase().includes((searchTerm || '').toLowerCase())
+  // Conteo de SKUs por rubro para las píldoras de filtro
+  const rubroOptions = useMemo<{ codigo: RubroCodigo; etiqueta: string }[]>(
+    () => [...RUBROS_CLAVE.map((r) => ({ codigo: r.codigo, etiqueta: r.label })), { codigo: 'OTROS', etiqueta: 'Otros' }],
+    []
   );
-  if (viewMode === 'focus') {
-    filteredSkuStats = filteredSkuStats.filter(stat => stat.cumplimiento < 100);
-  }
+
+  const rubroCounts = useMemo(() => {
+    const counts: Record<string, number> = { TODOS: viewStats.length, OTROS: 0 };
+    RUBROS_CLAVE.forEach((r) => {
+      counts[r.codigo] = 0;
+    });
+    viewStats.forEach((stat) => {
+      const rCode = clasificarRubro(stat.skuId, stat.articulo);
+      counts[rCode] = (counts[rCode] || 0) + 1;
+    });
+    return counts;
+  }, [viewStats]);
+
+  // Apply search, rubro and status filters
+  const filteredSkuStats = useMemo(() => {
+    const q = normSearch(searchTerm);
+    const qCode = normSkuCode(searchTerm);
+
+    return viewStats.filter((stat) => {
+      const statRubro = clasificarRubro(stat.skuId, stat.articulo);
+      if (rubroFilter !== 'TODOS' && statRubro !== rubroFilter) {
+        return false;
+      }
+
+      if (q) {
+        const skuNorm = normSearch(stat.skuId);
+        const skuCodeNorm = normSkuCode(stat.skuId);
+        const artNorm = normSearch(stat.articulo);
+        const catNorm = normSearch(stat.categoria || '');
+        const rubroLabelNorm = normSearch(RUBRO_LABEL[statRubro] || '');
+        const matchText =
+          skuNorm.includes(q) ||
+          (qCode.length > 0 && skuCodeNorm.includes(qCode)) ||
+          artNorm.includes(q) ||
+          catNorm.includes(q) ||
+          rubroLabelNorm.includes(q);
+        if (!matchText) return false;
+      }
+
+      const effectiveStatus = viewMode === 'focus' && statusFilter === 'TODOS' ? 'FALTANTES' : statusFilter;
+      if (effectiveStatus === 'FALTANTES') {
+        return useHist ? stat.ejecutado <= 0 : stat.cumplimiento < 100;
+      }
+      if (effectiveStatus === 'CUMPLIDOS') {
+        return !stat.sinCuota && stat.cumplimiento >= 100;
+      }
+      if (effectiveStatus === 'CON_VENTA') {
+        return stat.ejecutado > 0;
+      }
+      if (effectiveStatus === 'SIN_VENTA') {
+        return stat.ejecutado <= 0;
+      }
+      return true;
+    });
+  }, [viewStats, searchTerm, rubroFilter, statusFilter, viewMode, useHist]);
+
+  const isTableFiltered =
+    Boolean(searchTerm.trim()) ||
+    rubroFilter !== 'TODOS' ||
+    statusFilter !== 'TODOS' ||
+    viewMode === 'focus';
+
+  const filteredMetaTotal = useMemo(
+    () => filteredSkuStats.reduce((acc, s) => acc + (s.sinCuota ? 0 : s.meta), 0),
+    [filteredSkuStats]
+  );
+  const filteredEjecutadoTotal = useMemo(
+    () => filteredSkuStats.reduce((acc, s) => acc + (s.sinHist ? 0 : s.ejecutado), 0),
+    [filteredSkuStats]
+  );
+  const filteredCumplimiento =
+    filteredMetaTotal > 0 ? (filteredEjecutadoTotal / filteredMetaTotal) * 100 : 0;
+
+  const allFilteredSelected =
+    filteredSkuStats.length > 0 && filteredSkuStats.every((st) => selectedCodes.includes(st.skuId));
+
+  const toggleAllFilteredCodes = () => {
+    const visibleCodes = filteredSkuStats.map((st) => st.skuId);
+    if (visibleCodes.length === 0) return;
+    setSelectedCodes((prev) => {
+      const allIn = visibleCodes.every((c) => prev.includes(c));
+      if (allIn) {
+        return prev.filter((c) => !visibleCodes.includes(c));
+      }
+      const next = Array.from(new Set([...prev, ...visibleCodes]));
+      if (prev.length === 0 && next.length > 0) {
+        setTimeout(() => dashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      }
+      return next;
+    });
+  };
 
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -470,9 +570,33 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
           
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
              <div className="flex bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden shrink-0">
-                 <button onClick={() => setViewMode('focus')} className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors border-r ${viewMode === 'focus' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}>Modo Focus</button>
-                 <button onClick={() => setViewMode('hoja')} className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors border-r ${viewMode === 'hoja' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}>Hoja Vendedor</button>
-                 <button onClick={() => setViewMode('tarjetas')} className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors ${viewMode === 'tarjetas' ? 'font-bold text-white bg-red-600' : 'text-neutral-400 hover:text-white'}`}>Tarjetas</button>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     setViewMode('focus');
+                     setStatusFilter('FALTANTES');
+                   }}
+                   className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors border-r cursor-pointer ${viewMode === 'focus' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}
+                 >
+                   Modo Focus
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     setViewMode('hoja');
+                     if (statusFilter === 'FALTANTES') setStatusFilter('TODOS');
+                   }}
+                   className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors border-r cursor-pointer ${viewMode === 'hoja' ? 'font-bold text-white bg-red-600 border-red-700' : 'text-neutral-400 hover:text-white border-neutral-800'}`}
+                 >
+                   Hoja Vendedor
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => setViewMode('tarjetas')}
+                   className={`flex-1 sm:flex-none px-3 md:px-4 py-2 md:py-1.5 text-xs font-sans transition-colors cursor-pointer ${viewMode === 'tarjetas' ? 'font-bold text-white bg-red-600' : 'text-neutral-400 hover:text-white'}`}
+                 >
+                   Tarjetas
+                 </button>
              </div>
              
              <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -480,16 +604,161 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
                      <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
                      <input 
                          type="text" 
-                         placeholder="Filtrar SKU (ej: 1401)..." 
-                         className="w-full sm:w-56 md:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-4 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
+                         placeholder="Filtrar SKU, artículo o rubro..." 
+                         className="w-full sm:w-56 md:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-8 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
                          value={searchTerm}
                          onChange={(e) => setSearchTerm(e.target.value)}
                      />
+                     {searchTerm && (
+                       <button
+                         type="button"
+                         onClick={() => setSearchTerm('')}
+                         title="Limpiar búsqueda"
+                         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white transition-colors cursor-pointer"
+                       >
+                         <X className="w-3.5 h-3.5" />
+                       </button>
+                     )}
                  </div>
-                 <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors">
+                 <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors cursor-pointer">
                      <FileText className="w-3.5 h-3.5" /> PDF
                  </button>
              </div>
+          </div>
+        </div>
+
+        {/* Interactive Rubro & Status Filters Bar */}
+        <div className="px-4 py-3 bg-neutral-900/40 border-b border-neutral-800 flex flex-col gap-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-sans font-bold text-neutral-500 uppercase tracking-wider mr-1 flex items-center gap-1">
+                <Filter className="w-3 h-3 text-red-500" /> Rubro:
+              </span>
+              <button
+                type="button"
+                onClick={() => setRubroFilter('TODOS')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                  rubroFilter === 'TODOS'
+                    ? 'bg-red-600 text-white border-red-500'
+                    : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                }`}
+              >
+                Todos ({rubroCounts.TODOS || 0})
+              </button>
+              {rubroOptions.map((r) => {
+                const count = rubroCounts[r.codigo] || 0;
+                if (count === 0 && rubroFilter !== r.codigo) return null;
+                const active = rubroFilter === r.codigo;
+                return (
+                  <button
+                    key={r.codigo}
+                    type="button"
+                    onClick={() => setRubroFilter(active ? 'TODOS' : r.codigo)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-red-600 text-white border-red-500'
+                        : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:text-white hover:border-neutral-700'
+                    }`}
+                  >
+                    {r.etiqueta} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            {isTableFiltered && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setRubroFilter('TODOS');
+                  setStatusFilter('TODOS');
+                  if (viewMode === 'focus') setViewMode('hoja');
+                }}
+                className="px-2.5 py-1 rounded-md text-[11px] font-sans font-bold bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors cursor-pointer flex items-center gap-1"
+              >
+                <X className="w-3 h-3" /> Limpiar filtros ({filteredSkuStats.length}/{viewStats.length})
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-sans font-bold text-neutral-500 uppercase tracking-wider mr-1">
+              Estado SKU:
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter('TODOS');
+                if (viewMode === 'focus') setViewMode('hoja');
+              }}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                statusFilter === 'TODOS' && viewMode !== 'focus'
+                  ? 'bg-neutral-200 text-black border-white'
+                  : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-white'
+              }`}
+            >
+              Todos
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const next = statusFilter === 'FALTANTES' ? 'TODOS' : 'FALTANTES';
+                setStatusFilter(next);
+                if (next === 'TODOS' && viewMode === 'focus') setViewMode('hoja');
+              }}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                statusFilter === 'FALTANTES' || viewMode === 'focus'
+                  ? 'bg-amber-600 text-white border-amber-500'
+                  : 'bg-neutral-900 text-amber-400/90 border-neutral-800 hover:border-amber-700/60'
+              }`}
+            >
+              {useHist ? 'Sin Venta en Mes(es)' : 'Por Cumplir (<100%)'}
+            </button>
+            {!useHist && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter(statusFilter === 'CUMPLIDOS' ? 'TODOS' : 'CUMPLIDOS');
+                  if (viewMode === 'focus') setViewMode('hoja');
+                }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                  statusFilter === 'CUMPLIDOS'
+                    ? 'bg-emerald-600 text-white border-emerald-500'
+                    : 'bg-neutral-900 text-emerald-400/90 border-neutral-800 hover:border-emerald-700/60'
+                }`}
+              >
+                Cumplidos (≥100%)
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter(statusFilter === 'CON_VENTA' ? 'TODOS' : 'CON_VENTA');
+                if (viewMode === 'focus') setViewMode('hoja');
+              }}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                statusFilter === 'CON_VENTA'
+                  ? 'bg-sky-600 text-white border-sky-500'
+                  : 'bg-neutral-900 text-sky-400/90 border-neutral-800 hover:border-sky-700/60'
+              }`}
+            >
+              Con Venta (&gt;0 KG)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter(statusFilter === 'SIN_VENTA' ? 'TODOS' : 'SIN_VENTA');
+                if (viewMode === 'focus') setViewMode('hoja');
+              }}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-sans font-bold border transition-colors cursor-pointer ${
+                statusFilter === 'SIN_VENTA'
+                  ? 'bg-rose-700 text-white border-rose-500'
+                  : 'bg-neutral-900 text-rose-400/90 border-neutral-800 hover:border-rose-700/60'
+              }`}
+            >
+              Sin Venta (0 KG)
+            </button>
           </div>
         </div>
 
@@ -543,7 +812,16 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-red-700 border-b border-red-800 text-[10px] font-sans text-white uppercase tracking-wider">
-                <th className="p-3 font-bold border-r border-red-800 w-14 text-center" title="Tilda uno o varios productos para el Dashboard 360°">360°</th>
+                <th
+                  onClick={toggleAllFilteredCodes}
+                  className="p-3 font-bold border-r border-red-800 w-14 text-center cursor-pointer hover:bg-red-800/80 transition-colors select-none"
+                  title="Clic para tildar o destildar todos los SKUs filtrados en el Dashboard 360°"
+                >
+                  <span className="inline-flex items-center justify-center gap-1">
+                    {allFilteredSelected ? <CheckSquare className="w-3.5 h-3.5 text-white" /> : <Square className="w-3.5 h-3.5 text-white/80" />}
+                    <span>360°</span>
+                  </span>
+                </th>
                 <th className="p-3 font-bold border-r border-red-800">Cod</th>
                 <th className="p-3 font-bold border-r border-red-800">Articulo</th>
                 <th className="p-3 font-bold text-right border-r border-red-800">Cuota</th>
@@ -587,6 +865,31 @@ export const VolumenTab: React.FC<Props> = ({ filteredVolumen, activeVendedorId,
                 );
               })}
               
+              {filteredSkuStats.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-6 text-center text-neutral-500 font-sans text-xs">
+                    No se encontraron SKUs con los filtros actuales.
+                  </td>
+                </tr>
+              )}
+              {isTableFiltered && filteredSkuStats.length < viewStats.length && (
+                <tr className="border-t border-amber-800/50 bg-amber-950/20">
+                  <td className="p-3 border-r border-neutral-800/50"></td>
+                  <td className="p-3 border-r border-neutral-800/50 text-amber-400 font-bold uppercase">Subtotal</td>
+                  <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-amber-200 uppercase tracking-wider">
+                    Filtro Activo ({filteredSkuStats.length} de {viewStats.length} SKUs)
+                  </td>
+                  <td className="p-3 border-r border-neutral-800/50 text-right text-amber-200 font-bold">
+                    {useHist ? '—' : formatNumber(filteredMetaTotal)}
+                  </td>
+                  <td className="p-3 border-r border-neutral-800/50 text-right text-amber-300 font-bold">
+                    {formatNumber(filteredEjecutadoTotal)}
+                  </td>
+                  <td className="p-3 text-right text-amber-300 font-bold">
+                    {useHist ? '—' : `${(isNaN(filteredCumplimiento) ? 0 : filteredCumplimiento).toFixed(2)}%`}
+                  </td>
+                </tr>
+              )}
               {/* TFOOT / TOTALS */}
               <tr className="border-t border-neutral-700 bg-neutral-900/30">
                 <td className="p-3 border-r border-neutral-800/50"></td>

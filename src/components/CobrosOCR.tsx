@@ -4,7 +4,8 @@ import heic2any from 'heic2any';
 import { 
   Camera, UploadCloud, CheckCircle, AlertTriangle, Search, 
   Loader2, Download, History, Trash2, Calendar, FileText, 
-  RefreshCw, DollarSign, Building2, User, Hash, ArrowRight
+  RefreshCw, DollarSign, Building2, User, Hash, ArrowRight,
+  Share2, ClipboardPaste, Smartphone, X
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -84,6 +85,15 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [alertMsg, setAlertMsg] = useState<{ type: 'error' | 'success' | 'info', text: string } | null>(null);
+  const [receivedFromWhatsApp, setReceivedFromWhatsApp] = useState(false);
+  const [showWhatsAppGuide, setShowWhatsAppGuide] = useState(false);
+  const [canInstallPwa, setCanInstallPwa] = useState<boolean>(() =>
+    typeof window !== 'undefined' && Boolean((window as any).__fdvDeferredInstallPrompt)
+  );
+  const [isStandalonePwa, setIsStandalonePwa] = useState<boolean>(() =>
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(display-mode: standalone)')?.matches || (window.navigator as any)?.standalone === true)
+  );
 
   // Client Data
   const [codigoCliente, setCodigoCliente] = useState('');
@@ -476,12 +486,26 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   };
 
-  // Soporte de pegado desde portapapeles (WhatsApp / Capturas)
+  // Soporte de pegado desde portapapeles (WhatsApp / Capturas) y recepción directa vía Web Share Target
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith('image/')) {
+            const blob = items[i].getAsFile();
+            if (blob) {
+              setReceivedFromWhatsApp(true);
+              handleImageInput(blob);
+              return;
+            }
+          }
+        }
+      }
       if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
         const file = e.clipboardData.files[0];
         if (file.type.startsWith('image/')) {
+          setReceivedFromWhatsApp(true);
           handleImageInput(file);
         }
       }
@@ -489,6 +513,170 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [pagosConsolidados]);
+
+  // Escuchar eventos de instalación PWA para habilitar el botón "Compartir desde WhatsApp"
+  useEffect(() => {
+    const onPromptReady = () => setCanInstallPwa(Boolean((window as any).__fdvDeferredInstallPrompt));
+    const onInstalled = () => {
+      setCanInstallPwa(false);
+      setIsStandalonePwa(true);
+      setAlertMsg({
+        type: 'success',
+        text: '¡App instalada! Ahora en WhatsApp puedes tocar cualquier comprobante -> Compartir -> FDV Cobros.'
+      });
+    };
+    window.addEventListener('fdv-install-prompt-ready', onPromptReady);
+    window.addEventListener('fdv-app-installed', onInstalled);
+    return () => {
+      window.removeEventListener('fdv-install-prompt-ready', onPromptReady);
+      window.removeEventListener('fdv-app-installed', onInstalled);
+    };
+  }, []);
+
+  // Consumir comprobante compartido directamente desde el menú "Compartir" de WhatsApp (Cache Storage o Fallback localStorage)
+  useEffect(() => {
+    let isMounted = true;
+
+    const applySharedCaptionMeta = (captionText: string) => {
+      const clean = String(captionText || '').trim();
+      if (!clean) return;
+      // Si el texto compartido desde WhatsApp incluye un código de cliente o factura, intentar vincularlo
+      const facMatch = clean.match(/(?:fac(?:tura)?|nro|nota)\s*[:#-]?\s*([A-Za-z0-9-]{3,15})/i);
+      if (facMatch && facMatch[1] && !factura) {
+        setFactura(facMatch[1]);
+      }
+    };
+
+    const consumeSharedReceipt = async () => {
+      try {
+        // 1. Revisar Cache Storage escrito por el Service Worker (Web Share Target API)
+        if ('caches' in window) {
+          const cache = await caches.open('fdv-whatsapp-share-v1');
+          const sharedRes = await cache.match('/__shared_whatsapp_receipt__');
+          if (sharedRes) {
+            const metaRes = await cache.match('/__shared_whatsapp_meta__');
+            const meta = metaRes ? await metaRes.json().catch(() => null) : null;
+            const blob = await sharedRes.blob();
+            await cache.delete('/__shared_whatsapp_receipt__');
+            await cache.delete('/__shared_whatsapp_meta__');
+
+            if (blob && blob.size > 0 && isMounted) {
+              const fileName =
+                meta?.name ||
+                decodeURIComponent(sharedRes.headers.get('X-File-Name') || 'soporte_whatsapp.jpg');
+              const mimeType = blob.type || meta?.type || 'image/jpeg';
+              const sharedFile = new File([blob], fileName, { type: mimeType });
+
+              setActiveSubTab('nuevo');
+              setReceivedFromWhatsApp(true);
+              if (meta?.text || meta?.title) {
+                applySharedCaptionMeta(`${meta.title || ''} ${meta.text || ''}`);
+              }
+              if (window.location.search.includes('shared-receipt') || window.location.hash === '#cobros') {
+                window.history.replaceState({}, document.title, window.location.pathname);
+              }
+              handleImageInput(sharedFile);
+              return;
+            }
+          }
+        }
+
+        // 2. Revisar Fallback en localStorage escrito por POST /share-target-cobro del servidor
+        const rawPayload = localStorage.getItem('fdv_shared_whatsapp_payload');
+        if (rawPayload) {
+          localStorage.removeItem('fdv_shared_whatsapp_payload');
+          const parsed = JSON.parse(rawPayload);
+          if (parsed && parsed.dataUrl && isMounted) {
+            const fetchRes = await fetch(parsed.dataUrl);
+            const blob = await fetchRes.blob();
+            const sharedFile = new File(
+              [blob],
+              parsed.name || 'soporte_whatsapp.jpg',
+              { type: parsed.type || blob.type || 'image/jpeg' }
+            );
+            setActiveSubTab('nuevo');
+            setReceivedFromWhatsApp(true);
+            if (window.location.search.includes('shared-receipt') || window.location.hash === '#cobros') {
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+            handleImageInput(sharedFile);
+          }
+        }
+      } catch (err) {
+        console.warn('Error leyendo comprobante compartido desde WhatsApp:', err);
+      }
+    };
+
+    consumeSharedReceipt();
+
+    const onSwMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'WHATSAPP_SHARED_RECEIPT') {
+        consumeSharedReceipt();
+      }
+    };
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage);
+    }
+    return () => {
+      isMounted = false;
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
+    };
+  }, []);
+
+  // Botón de 1 toque: Pegar imagen copiada desde WhatsApp sin abrir galería
+  const handlePasteFromWhatsAppButton = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        setAlertMsg({
+          type: 'info',
+          text: 'En WhatsApp copia la imagen del pago y luego mantén presionado aquí o usa Ctrl+V para pegarla.'
+        });
+        return;
+      }
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((t) => t.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const file = new File([blob], `whatsapp_cobro_${Date.now()}.png`, { type: imageType });
+          setReceivedFromWhatsApp(true);
+          handleImageInput(file);
+          return;
+        }
+      }
+      setAlertMsg({
+        type: 'error',
+        text: 'No se encontró ninguna imagen copiada en el portapapeles. En WhatsApp toca el comprobante -> Copiar y vuelve a tocar este botón.'
+      });
+    } catch (err) {
+      setAlertMsg({
+        type: 'info',
+        text: 'Permite el acceso al portapapeles cuando el navegador lo solicite, o usa la opción "Compartir desde WhatsApp".'
+      });
+    }
+  };
+
+  // Activar la app en el menú nativo "Compartir" de WhatsApp (Web Share Target PWA)
+  const handleEnableWhatsAppShareTarget = async () => {
+    const deferredPrompt = (window as any).__fdvDeferredInstallPrompt;
+    if (deferredPrompt && typeof deferredPrompt.prompt === 'function') {
+      try {
+        await deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        if (choice && choice.outcome === 'accepted') {
+          (window as any).__fdvDeferredInstallPrompt = null;
+          setCanInstallPwa(false);
+          setIsStandalonePwa(true);
+        }
+      } catch (e) {
+        setShowWhatsAppGuide(true);
+      }
+    } else {
+      setShowWhatsAppGuide((prev) => !prev);
+    }
+  };
 
   // Consolidar y guardar pago
   const handleSave = async () => {
@@ -579,6 +767,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
 
       // Limpiar formulario para el siguiente pago de forma segura
       setPreviewImage(null);
+      setReceivedFromWhatsApp(false);
       setReferencia('');
       setMontoDisplay('');
       setMontoNumerico(0);
@@ -887,35 +1076,138 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
           {/* COLUMNA IZQUIERDA: FORMULARIO Y CARGA */}
           <div className="space-y-5">
             
-            {/* 1. CARGA DE COMPROBANTE (IA OCR) */}
+            {/* 1. CARGA DE COMPROBANTE (IA OCR) + RECEPCIÓN DIRECTA DESDE WHATSAPP */}
             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 shadow-sm">
-              <div className="flex justify-between items-center mb-3">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                 <h3 className="text-xs font-sans font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-2">
                   <UploadCloud className="w-4 h-4 text-red-500" />
-                  1. Carga de comprobante (OCR con IA)
+                  1. Carga de comprobante (WhatsApp / OCR con IA)
                 </h3>
-                {previewImage && (
-                  <button 
-                    onClick={() => setPreviewImage(null)}
-                    className="text-[11px] text-neutral-400 hover:text-white bg-neutral-900 px-2.5 py-1 rounded border border-neutral-800 transition-colors"
-                  >
-                    Cambiar Imagen
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {receivedFromWhatsApp && previewImage && (
+                    <span className="text-[10px] font-sans font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-700/60 px-2 py-0.5 rounded-full">
+                      Recibido de WhatsApp
+                    </span>
+                  )}
+                  {previewImage && (
+                    <button 
+                      onClick={() => {
+                        setPreviewImage(null);
+                        setReceivedFromWhatsApp(false);
+                      }}
+                      className="text-[11px] text-neutral-400 hover:text-white bg-neutral-900 px-2.5 py-1 rounded border border-neutral-800 transition-colors cursor-pointer"
+                    >
+                      Cambiar Imagen
+                    </button>
+                  )}
+                </div>
               </div>
 
+              {/* Barra Directa de WhatsApp (Evita buscar en la galería) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={handlePasteFromWhatsAppButton}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-sans font-bold text-xs shadow-sm transition-all cursor-pointer"
+                  title="Pega con 1 toque el comprobante copiado en WhatsApp sin entrar a la galería"
+                >
+                  <ClipboardPaste className="w-4 h-4 shrink-0" />
+                  <span>Pegar Soporte de WhatsApp</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppGuide((prev) => !prev)}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-700/60 font-sans font-bold text-xs transition-all cursor-pointer"
+                  title="Ver cómo enviar el soporte directo desde el botón Compartir de WhatsApp hasta la App"
+                >
+                  <Share2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>Compartir desde WhatsApp</span>
+                </button>
+              </div>
+
+              {/* Panel desplegable para Compartir directo desde el menú nativo de WhatsApp */}
+              {showWhatsAppGuide && (
+                <div className="mb-3 p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-800/60 text-xs font-sans text-neutral-200 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 shrink-0" />
+                      <span>Cómo enviar el soporte directo desde WhatsApp (sin buscar en la galería):</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowWhatsAppGuide(false)}
+                      className="text-neutral-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 text-[11px] text-neutral-300 leading-relaxed">
+                    <p>
+                      <strong className="text-emerald-300">Opción A · Compartir directo desde WhatsApp a la App:</strong>{' '}
+                      En WhatsApp abre la foto del pago → toca los 3 puntos <strong>⋮</strong> (arriba a la derecha) → toca <strong>Compartir</strong> → selecciona <strong>FDV Cobros</strong>. La app se abrirá directo en este módulo con el soporte cargado automáticamente.
+                    </p>
+                    <p>
+                      <strong className="text-emerald-300">Opción B · Copiar en WhatsApp y Pegar aquí en 1 toque:</strong>{' '}
+                      En WhatsApp toca la foto del pago → toca <strong>Copiar</strong> → vuelve a la app y toca el botón verde <strong>"Pegar Soporte de WhatsApp"</strong>.
+                    </p>
+                  </div>
+
+                  {!isStandalonePwa && (
+                    <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-800/40">
+                      <span className="text-[11px] text-emerald-200">
+                        {canInstallPwa
+                          ? 'Activa el acceso directo para que "FDV Cobros" aparezca en el menú Compartir de tu WhatsApp:'
+                          : 'Para que "FDV Cobros" aparezca en el menú Compartir de WhatsApp, instala la app desde el menú del navegador (⋮ -> Instalar aplicación).'}
+                      </span>
+                      {canInstallPwa && (
+                        <button
+                          type="button"
+                          onClick={handleEnableWhatsAppShareTarget}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] cursor-pointer transition-colors"
+                        >
+                          Activar en menú Compartir de WhatsApp
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {!previewImage ? (
-                <label className="border-2 border-dashed border-neutral-800 hover:border-red-600 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer bg-neutral-900/40 hover:bg-neutral-900 transition-all text-center min-h-[140px] group">
+                <label
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                      setReceivedFromWhatsApp(true);
+                      handleImageInput(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  className="border-2 border-dashed border-neutral-800 hover:border-red-600 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer bg-neutral-900/40 hover:bg-neutral-900 transition-all text-center min-h-[125px] group"
+                >
                   <Camera className="w-7 h-7 text-neutral-400 group-hover:text-red-500 transition-colors mb-2" />
-                  <span className="text-sm text-neutral-200 font-bold">Pega una captura, Toca o Arrastra</span>
-                  <span className="text-xs text-neutral-500 mt-1 max-w-[280px]">
-                    Admite JPG, PNG, HEIC de iPhone o pega directo con Ctrl+V desde WhatsApp
+                  <span className="text-sm text-neutral-200 font-bold">
+                    Comparte desde WhatsApp, Pega o Toca aquí
+                  </span>
+                  <span className="text-xs text-neutral-500 mt-1 max-w-[300px]">
+                    Comparte directo desde WhatsApp a <strong>FDV Cobros</strong>, usa el botón <strong>Pegar Soporte de WhatsApp</strong> o toma foto con la cámara
                   </span>
                   <input 
                     type="file" 
                     className="hidden" 
                     accept="image/*,.heic" 
-                    onChange={e => e.target.files && handleImageInput(e.target.files[0])} 
+                    onChange={e => {
+                      if (e.target.files && e.target.files[0]) {
+                        setReceivedFromWhatsApp(false);
+                        handleImageInput(e.target.files[0]);
+                      }
+                    }} 
                   />
                 </label>
               ) : (

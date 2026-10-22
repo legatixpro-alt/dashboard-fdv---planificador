@@ -227,21 +227,40 @@ export const RubroDashboard360: React.FC<Props> = ({
     return m;
   }, [chartPoints, chartMetric, metaActual]);
 
+  const norm360 = (val: string) =>
+    String(val || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
   // Filtrado de productos / SKUs
   const filteredSkus = useMemo(() => {
     if (!data) return [];
-    const q = searchQuery.trim().toLowerCase();
+    const q = norm360(searchQuery);
+    const qCode = q.replace(/^[#0\s]+/, '');
     return data.skus.filter(
-      (s) => !q || s.articulo.toLowerCase().includes(q) || s.sku.toLowerCase().includes(q)
+      (s) =>
+        !q ||
+        norm360(s.articulo).includes(q) ||
+        norm360(s.sku).includes(q) ||
+        (qCode.length > 0 && norm360(s.sku).replace(/^[#0\s]+/, '').includes(qCode))
     );
   }, [data, searchQuery]);
 
   // Filtrado de clientes 360
   const filteredClientes = useMemo(() => {
     if (!data) return [];
-    const q = searchQuery.trim().toLowerCase();
+    const q = norm360(searchQuery);
+    const qCode = q.replace(/^[#0\s]+/, '');
     return data.clientes.filter((c) => {
-      if (q && !c.cliente.toLowerCase().includes(q) && !c.id.toLowerCase().includes(q) && !c.vendedor.toLowerCase().includes(q)) {
+      if (
+        q &&
+        !norm360(c.cliente).includes(q) &&
+        !norm360(c.id).includes(q) &&
+        !(qCode.length > 0 && norm360(c.id).replace(/^[#0\s]+/, '').includes(qCode)) &&
+        !norm360(c.vendedor).includes(q)
+      ) {
         return false;
       }
       switch (clientFilter) {

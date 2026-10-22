@@ -33,12 +33,44 @@ import { Degustacion } from './types';
 
 type TabId = 'ACTIVACION_RUBRO' | 'VOLUMEN' | 'ACTIVACION_CLIENTES' | 'COBROS_OCR' | 'DEGUSTACIONES' | 'ALKOSTO' | 'TRAZABILIDAD';
 
-export default function App() {
-  const [userRole, setUserRole] = useState<Role>('VENDEDOR');
-  const [loggedInVendor, setLoggedInVendor] = useState<string>('');
-  const [activeVendedorId, setActiveVendedorId] = useState<string>('');
+const isIncomingWhatsAppShare = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      params.get('shared-receipt') === '1' ||
+      window.location.hash === '#cobros' ||
+      Boolean(localStorage.getItem('fdv_shared_whatsapp_payload'))
+    );
+  } catch {
+    return false;
+  }
+};
 
-  const [activeTab, setActiveTab] = useState<TabId>('ACTIVACION_RUBRO');
+export default function App() {
+  const [userRole, setUserRole] = useState<Role>(() => {
+    if (isIncomingWhatsAppShare() && localStorage.getItem('dashboard_fdv_token')) {
+      return (localStorage.getItem('dashboard_fdv_role') as Role) || 'VENDEDOR';
+    }
+    return 'VENDEDOR';
+  });
+  const [loggedInVendor, setLoggedInVendor] = useState<string>(() => {
+    if (isIncomingWhatsAppShare() && localStorage.getItem('dashboard_fdv_token')) {
+      return localStorage.getItem('dashboard_fdv_vendor') || '';
+    }
+    return '';
+  });
+  const [activeVendedorId, setActiveVendedorId] = useState<string>(() => {
+    if (isIncomingWhatsAppShare() && localStorage.getItem('dashboard_fdv_token')) {
+      return localStorage.getItem('dashboard_fdv_active_route') || '';
+    }
+    return '';
+  });
+
+  const [pendingWhatsAppShare, setPendingWhatsAppShare] = useState<boolean>(() => isIncomingWhatsAppShare());
+  const [activeTab, setActiveTab] = useState<TabId>(() =>
+    isIncomingWhatsAppShare() ? 'COBROS_OCR' : 'ACTIVACION_RUBRO'
+  );
   const [isTabDropdownOpen, setIsTabDropdownOpen] = useState(false);
   
   const [volumenData, setVolumenData] = useState<VolumenData[]>([]);
@@ -49,12 +81,41 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [authUsuario, setAuthUsuario] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  // Siempre iniciar en la pantalla de Login al abrir la aplicación para que cada usuario ingrese con sus credenciales
+  // Siempre iniciar en la pantalla de Login al abrir la aplicación normalmente;
+  // si viene compartiendo un soporte desde WhatsApp y ya tenía sesión activa, conservarla para abrir directo Cobros.
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    if (isIncomingWhatsAppShare() && localStorage.getItem('dashboard_fdv_token')) {
+      return true;
+    }
     clearAuthSession();
     return false;
   });
   const [loginError, setLoginError] = useState('');
+
+  // Escuchar eventos de comprobante compartido desde WhatsApp (Service Worker / hash)
+  useEffect(() => {
+    const onSwMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'WHATSAPP_SHARED_RECEIPT') {
+        setPendingWhatsAppShare(true);
+        setActiveTab('COBROS_OCR');
+      }
+    };
+    const onHashChange = () => {
+      if (window.location.hash === '#cobros') {
+        setActiveTab('COBROS_OCR');
+      }
+    };
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage);
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
+      window.removeEventListener('hashchange', onHashChange);
+    };
+  }, []);
 
   // Verificación estricta de la sesión criptográfica en el backend
   useEffect(() => {
@@ -304,6 +365,9 @@ export default function App() {
         saveAuthSession(data.token, data.user, initialRoute);
       }
       clearSheetsCache();
+      if (pendingWhatsAppShare || isIncomingWhatsAppShare()) {
+        setActiveTab('COBROS_OCR');
+      }
       setIsLoggedIn(true);
 
       if (hasValidSupabaseConfig) {
@@ -578,6 +642,15 @@ export default function App() {
             <h1 className="text-3xl font-sans font-bold text-white mb-2 tracking-tight">Dashboard <span className="text-red-500">FDV</span></h1>
             <p className="text-neutral-500 font-sans text-sm">Ingresa con tu usuario y contraseña</p>
           </div>
+
+          {pendingWhatsAppShare && (
+            <div className="bg-emerald-950/50 border border-emerald-700/60 rounded-lg p-3.5 mb-5 flex items-center gap-3">
+              <ScanText className="w-5 h-5 text-emerald-400 shrink-0" />
+              <p className="text-xs font-sans text-emerald-200 leading-snug">
+                <strong>Comprobante recibido desde WhatsApp.</strong> Ingresa tu usuario y contraseña para abrirlo automáticamente en el Módulo de Cobros.
+              </p>
+            </div>
+          )}
 
           {loginError && (
             <div className="bg-red-950/40 border border-red-900/50 rounded-lg p-4 mb-6 flex items-center gap-3">

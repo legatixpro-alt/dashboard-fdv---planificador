@@ -1,12 +1,19 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import React, { useMemo, useRef, useState } from 'react';
-import { Target, Search, FileText, CheckCircle2, Droplets, Flame, Drumstick, Package as PkgIcon, Sparkles, CheckSquare, Square, Activity } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Target, Search, FileText, CheckCircle2, Droplets, Flame, Drumstick, Package as PkgIcon, Sparkles, CheckSquare, Square, Activity, X, RotateCcw } from 'lucide-react';
 import { VolumenData, ActivacionData } from '../types';
 import { getMesLaboralInfo } from '../utils/calendar';
-import { RubroCodigo, RUBROS_ACTIVACION } from '../lib/rubros';
+import { RubroCodigo, RUBROS_ACTIVACION, clasificarRubro } from '../lib/rubros';
 import { categoryToRubroCode } from '../services/historialService';
 import { Rubro360Panel, RubroStatsActual } from './Rubro360Panel';
+
+const normSearchText = (val: string | undefined | null) =>
+  String(val || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 interface Props {
   filteredVolumen: VolumenData[];
@@ -28,9 +35,17 @@ interface CategoriaStats {
 export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActivacion, metasActivacion, activeVendedorId, vendedorFilter }) => {
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'TODOS' | 'EN_RIESGO' | 'CUMPLIDOS' | 'SELECCIONADOS_360'>('TODOS');
   const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
+  const [manualTick, setManualTick] = useState(0);
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
   const mesInfo = useMemo(() => getMesLaboralInfo(), []);
+
+  useEffect(() => {
+    const onManualUpdate = () => setManualTick((t) => t + 1);
+    window.addEventListener('fdv-manual-rubros-updated', onManualUpdate);
+    return () => window.removeEventListener('fdv-manual-rubros-updated', onManualUpdate);
+  }, []);
 
   const handleToggleRubro = (catOrCode: string | RubroCodigo, scrollToPanel = false) => {
     const code = categoryToRubroCode(catOrCode);
@@ -165,11 +180,40 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
           : activados
       };
     });
-  }, [metasActivacion, activeVendedorId, mesInfo, filteredActivacion]);
+  }, [metasActivacion, activeVendedorId, mesInfo, filteredActivacion, manualTick]);
 
-  const filteredStats = categoriaStats.filter(c => 
-    (c.categoria || '').toLowerCase().includes((searchTerm || '').toLowerCase())
-  );
+  const filteredStats = useMemo(() => {
+    const q = normSearchText(searchTerm);
+    return categoriaStats.filter((c) => {
+      const rCode = categoryToRubroCode(c.categoria);
+      if (statusFilter === 'EN_RIESGO' && c.cumplimiento >= 100) return false;
+      if (statusFilter === 'CUMPLIDOS' && c.cumplimiento < 100) return false;
+      if (statusFilter === 'SELECCIONADOS_360' && selectedRubros.length > 0 && !selectedRubros.includes(rCode)) return false;
+
+      if (!q) return true;
+      if (normSearchText(c.categoria).includes(q)) return true;
+      // Coincidencia por sinónimos y artículos/SKUs pertenecientes al rubro
+      const extraKeywords: Record<RubroCodigo, string> = {
+        ACEITE: 'aceite oleo soya girasol',
+        AZUCAR: 'azucar montalban',
+        POLLO: 'pollo filet muslo alas higado molleja arroz',
+        ESTANDAR_ASTURIAS: 'jamon estandar superior asturias entero',
+        MORTADELA_SALPICAO: 'mortadela salpicao asturias ligeros',
+        OTROS: 'otros varios',
+      };
+      if ((extraKeywords[rCode] || '').includes(q)) return true;
+      return (filteredVolumen || []).some((v: any) => {
+        const sku = String(v.skuId || v.sku || '');
+        const art = String(v.articulo || v.nombre || '');
+        if (clasificarRubro(sku, art) !== rCode) return false;
+        return normSearchText(sku).includes(q) || normSearchText(art).includes(q);
+      });
+    });
+  }, [categoriaStats, searchTerm, statusFilter, selectedRubros, filteredVolumen]);
+
+  const countEnRiesgo = categoriaStats.filter((c) => c.cumplimiento < 100).length;
+  const countCumplidos = categoriaStats.filter((c) => c.cumplimiento >= 100).length;
+  const isAnyFilterActive = Boolean(searchTerm.trim()) || statusFilter !== 'TODOS';
 
   const totalMeta = categoriaStats.reduce((acc, curr) => acc + curr.meta, 0);
   const totalActivados = categoriaStats.reduce((acc, curr) => acc + curr.activados, 0);
@@ -251,7 +295,7 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
     const filtEstCierre = filteredStats.reduce((acc, curr) => acc + curr.estCierre, 0);
     const filtRitmo = filtFaltante === 0 ? '0/d' : `${(filtFaltante / diasRestantesMes).toFixed(1)}/d`;
 
-    if (searchTerm.trim() && filteredStats.length < categoriaStats.length) {
+    if (isAnyFilterActive && filteredStats.length < categoriaStats.length) {
       tableData.push([
         '',
         `SUBTOTAL FILTRADO (${filteredStats.length} rubros)`,
@@ -434,35 +478,89 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
       <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
         
         {/* Table Header / Controls */}
-        <div className="p-4 md:p-5 border-b border-neutral-800 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="bg-red-600 p-1.5 rounded">
-               <FileText className="w-4 h-4 text-white" />
+        <div className="p-4 md:p-5 border-b border-neutral-800 flex flex-col gap-3">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="bg-red-600 p-1.5 rounded">
+                 <FileText className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
+                  Activación por Categoría
+                </h2>
+                <p className="text-[11px] font-sans text-neutral-400">
+                  Tilda uno o varios rubros (selección múltiple) para desplegar su historial de ventas 360° y compararlos.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-base font-sans font-bold text-white uppercase tracking-wider">
-                Activación por Categoría
-              </h2>
-              <p className="text-[11px] font-sans text-neutral-400">
-                Tilda uno o varios rubros (selección múltiple) para desplegar su historial de ventas 360° y compararlos.
-              </p>
+
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+               <div className="relative flex-1 sm:flex-none">
+                 <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                 <input 
+                   type="text" 
+                   placeholder="Buscar rubro o SKU..." 
+                   className="w-full sm:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-8 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
+                   value={searchTerm}
+                   onChange={(e) => setSearchTerm(e.target.value)}
+                 />
+                 {searchTerm && (
+                   <button
+                     type="button"
+                     onClick={() => setSearchTerm('')}
+                     title="Limpiar búsqueda"
+                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-0.5 rounded-full cursor-pointer"
+                   >
+                     <X className="w-3.5 h-3.5" />
+                   </button>
+                 )}
+               </div>
+               <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors cursor-pointer">
+                 <FileText className="w-3.5 h-3.5" /> PDF
+               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-             <div className="relative flex-1 sm:flex-none">
-               <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
-               <input 
-                 type="text" 
-                 placeholder="Buscar categoría..." 
-                 className="w-full sm:w-64 bg-neutral-900 border border-neutral-800 text-sm font-sans text-white rounded-full pl-9 pr-4 py-2 min-h-[44px] sm:min-h-[36px] focus:outline-none focus:border-neutral-600 transition-colors"
-                 value={searchTerm}
-                 onChange={(e) => setSearchTerm(e.target.value)}
-               />
-             </div>
-             <button onClick={generarPDF} className="flex shrink-0 items-center justify-center gap-2 text-xs font-sans font-bold text-white bg-red-600 px-4 py-2 min-h-[44px] sm:min-h-[36px] rounded-full hover:bg-red-700 transition-colors">
-               <FileText className="w-3.5 h-3.5" /> PDF
-             </button>
+          {/* Barra de Filtros Rápidos por Estado */}
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className="text-[10px] font-sans font-bold uppercase tracking-wider text-neutral-400 mr-1">
+              Filtrar estado:
+            </span>
+            {(
+              [
+                ['TODOS', `Todos (${categoriaStats.length})`],
+                ['EN_RIESGO', `En Riesgo / Faltan (${countEnRiesgo})`],
+                ['CUMPLIDOS', `Cumplidos ≥100% (${countCumplidos})`],
+                ...(selectedRubros.length > 0
+                  ? [['SELECCIONADOS_360', `Solo Tildados 360° (${selectedRubros.length})`] as const]
+                  : []),
+              ] as const
+            ).map(([fKey, fLabel]) => (
+              <button
+                key={fKey}
+                type="button"
+                onClick={() => setStatusFilter(fKey as any)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-sans font-bold border transition-all cursor-pointer ${
+                  statusFilter === fKey
+                    ? 'bg-red-600 text-white border-red-500 shadow'
+                    : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-600'
+                }`}
+              >
+                {fLabel}
+              </button>
+            ))}
+            {isAnyFilterActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setStatusFilter('TODOS');
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-sans text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" /> Limpiar filtros
+              </button>
+            )}
           </div>
         </div>
 
@@ -493,7 +591,14 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
               </tr>
             </thead>
             <tbody className="text-xs md:text-sm font-mono text-neutral-300">
-              {filteredStats.map((stat) => {
+              {filteredStats.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="p-8 text-center text-neutral-500 font-sans">
+                    No se encontraron rubros que coincidan con el filtro aplicado.
+                  </td>
+                </tr>
+              ) : (
+                filteredStats.map((stat) => {
                  const isSuccess = stat.cumplimiento >= 100;
                  const rCode = categoryToRubroCode(stat.categoria);
                  const isSelected = selectedRubros.includes(rCode);
@@ -553,7 +658,33 @@ export const ActivacionRubro: React.FC<Props> = ({ filteredVolumen, filteredActi
                     </td>
                   </tr>
                  );
-              })}
+                })
+              )}
+
+              {filteredStats.length > 0 && filteredStats.length < categoriaStats.length && (() => {
+                const subMeta = filteredStats.reduce((a, c) => a + c.meta, 0);
+                const subAct = filteredStats.reduce((a, c) => a + c.activados, 0);
+                const subFalt = filteredStats.reduce((a, c) => a + c.faltante, 0);
+                const subCumpl = subMeta > 0 ? (subAct / subMeta) * 100 : 0;
+                const subEst = filteredStats.reduce((a, c) => a + c.estCierre, 0);
+                return (
+                  <tr className="bg-neutral-900/70 border-t border-neutral-700 font-bold text-xs">
+                    <td className="p-3 text-center text-amber-400 border-r border-neutral-800">∑</td>
+                    <td className="p-3 font-sans text-amber-300 border-r border-neutral-800">
+                      SUBTOTAL FILTRADO ({filteredStats.length} de {categoriaStats.length} rubros)
+                    </td>
+                    <td className="p-3 text-center border-r border-neutral-800">{subMeta}</td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{subAct}</td>
+                    <td className="p-3 text-center text-red-400 border-r border-neutral-800">{subFalt}</td>
+                    <td className="p-3 text-center border-r border-neutral-800">{subCumpl.toFixed(1)}%</td>
+                    <td className="p-3 font-sans border-r border-neutral-800 text-neutral-300">
+                      {subCumpl >= 100 ? 'Cumplido' : 'En Riesgo'}
+                    </td>
+                    <td className="p-3 text-center text-amber-400 border-r border-neutral-800">{subEst} cli</td>
+                    <td className="p-3 text-center text-neutral-500 font-sans text-[10px]">Filtro</td>
+                  </tr>
+                );
+              })()}
 
               {/* TFOOT / TOTALS ROW */}
               <tr className="bg-red-950/10 border-t-2 border-red-900/50 font-bold">

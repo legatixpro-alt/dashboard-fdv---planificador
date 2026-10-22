@@ -74,12 +74,27 @@ const VistaVolumen: React.FC<{ vendedor?: string }> = ({ vendedor }) => {
     rows.forEach(r => ps.set(pkey(r.ano, r.mes), { ano: r.ano, mes: r.mes }));
     const periodos = [...ps.values()].sort((a, b) => a.ano - b.ano || a.mes - b.mes);
 
-    const term = q.trim().toLowerCase();
+    const normHist = (val: string) =>
+      String(val || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+    const term = normHist(q);
+    const termCode = term.replace(/^[#0\s]+/, '');
     const by = new Map<string, { sku: string; articulo: string; rubro: string; v: Record<string, number>; total: number }>();
     const totales: Record<string, number> = {};
     rows.forEach(r => {
       if (rubro !== 'TODOS' && r.rubro !== rubro) return;
-      if (term && !(r.articulo.toLowerCase().includes(term) || r.sku.toLowerCase().includes(term))) return;
+      if (
+        term &&
+        !(
+          normHist(r.articulo).includes(term) ||
+          normHist(r.sku).includes(term) ||
+          (termCode.length > 0 && normHist(r.sku).replace(/^[#0\s]+/, '').includes(termCode))
+        )
+      )
+        return;
       const val = r[metric];
       const k = pkey(r.ano, r.mes);
       let f = by.get(r.sku);
@@ -322,10 +337,24 @@ const VistaClientes: React.FC<{ vendedor?: string }> = ({ vendedor }) => {
   const [limit, setLimit] = useState(80);
 
   const rows = useMemo(() => {
-    const term = q.trim().toLowerCase();
+    const normHist = (val: string) =>
+      String(val || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+    const term = normHist(q);
+    const termCode = term.replace(/^[#0\s]+/, '');
     return (data?.rows || [])
-      .filter(r => (!soloCartera || r.enCartera) &&
-        (!term || r.cliente.toLowerCase().includes(term) || r.id.toLowerCase().includes(term) || (r.vendedor || '').toLowerCase().includes(term)))
+      .filter(
+        r =>
+          (!soloCartera || r.enCartera) &&
+          (!term ||
+            normHist(r.cliente).includes(term) ||
+            normHist(r.id).includes(term) ||
+            (termCode.length > 0 && normHist(r.id).replace(/^[#0\s]+/, '').includes(termCode)) ||
+            normHist(r.vendedor || '').includes(term))
+      )
       .sort((a, b) => b.kgs - a.kgs);
   }, [data, q, soloCartera]);
 
