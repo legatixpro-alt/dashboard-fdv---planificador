@@ -35,10 +35,46 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
   const [searchTerm, setSearchTerm] = React.useState('');
   const [viewMode, setViewMode] = React.useState<'personal' | 'listado' | 'tarjetas'>('listado');
   const [selectedRubros, setSelectedRubros] = useState<RubroCodigo[]>([]);
+  const [statusFilter, setStatusFilter] = useState<'TODOS' | 'ACTIVOS' | 'FALTANTES' | 'FALTAN_RUBROS' | 'CINCO_RUBROS'>('TODOS');
+  const [faltanteRubroFilter, setFaltanteRubroFilter] = useState<RubroCodigo | null>(null);
   const [manualOverrides, setManualOverrides] = useState<ManualRubrosMap>(() => loadManualRubros());
   const dashboard360Ref = useRef<HTMLDivElement | null>(null);
+  const clientTableRef = useRef<HTMLDivElement | null>(null);
+
+  const handleSelectMetricFilter = (
+    nextStatus: 'TODOS' | 'ACTIVOS' | 'FALTANTES' | 'FALTAN_RUBROS' | 'CINCO_RUBROS',
+    scrollToTable = true
+  ) => {
+    setFaltanteRubroFilter(null);
+    setSelectedRubros([]);
+    setStatusFilter((prev) => {
+      const target = prev === nextStatus && nextStatus !== 'TODOS' ? 'TODOS' : nextStatus;
+      if (scrollToTable && target !== 'TODOS') {
+        setTimeout(() => {
+          clientTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 80);
+      }
+      return target;
+    });
+  };
+
+  const handleSelectRubroFaltante = (rubro: RubroCodigo) => {
+    setSelectedRubros([]);
+    setStatusFilter('TODOS');
+    setFaltanteRubroFilter((prev) => {
+      const next = prev === rubro ? null : rubro;
+      if (next) {
+        setTimeout(() => {
+          clientTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 80);
+      }
+      return next;
+    });
+  };
 
   const toggleRubro360 = (rubro: RubroCodigo, scrollTo = false) => {
+    setFaltanteRubroFilter(null);
+    setStatusFilter('TODOS');
     setSelectedRubros((prev) => {
       const yaEsta = prev.includes(rubro);
       const next = (yaEsta ? prev.filter((r) => r !== rubro) : [...prev, rubro]).sort(
@@ -245,6 +281,23 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     }
   };
 
+  // Métricas por rubro (Cartera vs Activos vs Faltantes por vender)
+  const rubroCarteraMetrics = useMemo(() => {
+    return RUBROS_ACTIVACION.map((rCode) => {
+      const activosRubro = clientList.filter((c) => clienteActivoEnRubro(c, rCode)).length;
+      const faltanRubro = Math.max(0, totalClientes - activosRubro);
+      const pctRubro = totalClientes > 0 ? (activosRubro / totalClientes) * 100 : 0;
+      return {
+        rCode,
+        label: RUBRO_LABEL[rCode],
+        cartera: totalClientes,
+        activos: activosRubro,
+        faltan: faltanRubro,
+        porcentaje: pctRubro,
+      };
+    });
+  }, [clientList, totalClientes]);
+
   const displayedClients = useMemo(() => {
     const term = (searchTerm || '').trim().toLowerCase();
     return clientList
@@ -255,12 +308,27 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         return nameMatch || codeMatch;
       })
       .filter(c => {
+        if (faltanteRubroFilter) {
+          return !clienteActivoEnRubro(c, faltanteRubroFilter);
+        }
+        if (statusFilter === 'FALTANTES') {
+          return c.cobertura === 0;
+        }
+        if (statusFilter === 'ACTIVOS') {
+          return c.cobertura > 0;
+        }
+        if (statusFilter === 'FALTAN_RUBROS') {
+          return c.cobertura < 5;
+        }
+        if (statusFilter === 'CINCO_RUBROS') {
+          return c.cobertura === 5;
+        }
         if (selectedRubros.length > 0) {
           return selectedRubros.some((r) => clienteActivoEnRubro(c, r));
         }
         return viewMode === 'personal' ? c.cobertura < 5 : true;
       });
-  }, [clientList, searchTerm, viewMode, selectedRubros]);
+  }, [clientList, searchTerm, viewMode, selectedRubros, statusFilter, faltanteRubroFilter]);
   
   const generarPDF = () => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -339,10 +407,25 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     doc.text(`${ritmoActual.toFixed(1)} cli/d`, 162, 57);
 
     let tableStartY = 64;
-    const isFiltered = selectedRubros.length > 0 || searchTerm.trim().length > 0 || viewMode === 'personal';
+    const isFiltered =
+      selectedRubros.length > 0 ||
+      searchTerm.trim().length > 0 ||
+      viewMode === 'personal' ||
+      statusFilter !== 'TODOS' ||
+      faltanteRubroFilter !== null;
     if (isFiltered) {
       const rubrosTxt = selectedRubros.length > 0
         ? `Rubros activos: ${selectedRubros.map(r => RUBRO_LABEL[r]).join(', ')}`
+        : faltanteRubroFilter
+        ? `Faltantes en rubro: ${RUBRO_LABEL[faltanteRubroFilter]}`
+        : statusFilter === 'FALTANTES'
+        ? 'Clientes Faltantes por Vender (0/5)'
+        : statusFilter === 'ACTIVOS'
+        ? 'Clientes Activos (>= 1 rubro)'
+        : statusFilter === 'FALTAN_RUBROS'
+        ? 'Clientes con Rubros Faltantes (< 5 rubros)'
+        : statusFilter === 'CINCO_RUBROS'
+        ? 'Clientes 100% Activados (5/5)'
         : viewMode === 'personal'
         ? 'Modo Personal (< 5 rubros)'
         : '';
@@ -361,10 +444,12 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     const countAsturias = displayedClients.filter(c => c.hasEstandarAsturias).length;
     const countSalpicao = displayedClients.filter(c => c.hasMortadelaSalpicao).length;
     const countActivosMostrados = displayedClients.filter(c => c.cobertura > 0).length;
+    const countFaltantesMostrados = Math.max(0, displayedClients.length - countActivosMostrados);
 
     const tableData = displayedClients.map((client) => [
       client.codigo,
       client.razonSocial,
+      client.cobertura > 0 ? 'ACTIVO' : 'FALTA VENDER',
       client.hasAceite ? 'SI' : '-',
       client.hasAzucar ? 'SI' : '-',
       client.hasPollo ? 'SI' : '-',
@@ -376,7 +461,8 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
     if (displayedClients.length > 0) {
       tableData.push([
         'TOTAL',
-        `CLIENTES ACTIVOS EN LISTADO (${countActivosMostrados} de ${displayedClients.length})`,
+        `CARTERA LISTADA: ${displayedClients.length} CLI`,
+        `Act: ${countActivosMostrados} | Falta: ${countFaltantesMostrados}`,
         `${countAceite}`,
         `${countAzucar}`,
         `${countPollo}`,
@@ -388,12 +474,12 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
 
     autoTable(doc, {
       startY: tableStartY,
-      head: [['Cód.', 'Razón Social / Cliente', 'Aceite', 'Azúcar', 'Pollo', 'Est. Asturias', 'Mort. Salpicao', 'Cobertura']],
-      body: tableData.length > 0 ? tableData : [['-', 'Sin registros de clientes disponibles para el filtro actual', '-', '-', '-', '-', '-', '-']],
+      head: [['Cód.', 'Razón Social / Cliente', 'Activ. General', 'Aceite', 'Azúcar', 'Pollo', 'Est. Asturias', 'Mort. Salpicao', 'Cobertura']],
+      body: tableData.length > 0 ? tableData : [['-', 'Sin registros de clientes disponibles para el filtro actual', '-', '-', '-', '-', '-', '-', '-']],
       theme: 'grid',
       styles: {
-        fontSize: 7.5,
-        cellPadding: 2,
+        fontSize: 7,
+        cellPadding: 1.8,
         valign: 'middle'
       },
       headStyles: {
@@ -401,17 +487,18 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         textColor: [255, 255, 255],
         fontStyle: 'bold',
         halign: 'center',
-        fontSize: 7.5
+        fontSize: 7
       },
       columnStyles: {
-        0: { cellWidth: 14, halign: 'center' },
+        0: { cellWidth: 13, halign: 'center' },
         1: { cellWidth: 'auto' },
-        2: { cellWidth: 15, halign: 'center' },
-        3: { cellWidth: 15, halign: 'center' },
-        4: { cellWidth: 15, halign: 'center' },
-        5: { cellWidth: 23, halign: 'center' },
-        6: { cellWidth: 23, halign: 'center' },
-        7: { cellWidth: 22, halign: 'center', fontStyle: 'bold' }
+        2: { cellWidth: 22, halign: 'center', fontStyle: 'bold' },
+        3: { cellWidth: 13, halign: 'center' },
+        4: { cellWidth: 13, halign: 'center' },
+        5: { cellWidth: 13, halign: 'center' },
+        6: { cellWidth: 20, halign: 'center' },
+        7: { cellWidth: 20, halign: 'center' },
+        8: { cellWidth: 20, halign: 'center', fontStyle: 'bold' }
       },
       didParseCell: (data) => {
         if (data.section === 'body') {
@@ -420,7 +507,15 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
             data.cell.styles.fillColor = [240, 240, 240];
             data.cell.styles.textColor = [20, 20, 20];
             data.cell.styles.fontStyle = 'bold';
-          } else if (data.column.index >= 2 && data.column.index <= 6) {
+          } else if (data.column.index === 2) {
+            if (data.cell.raw === 'ACTIVO') {
+              data.cell.styles.textColor = [16, 149, 79];
+              data.cell.styles.fontStyle = 'bold';
+            } else {
+              data.cell.styles.textColor = [211, 47, 47];
+              data.cell.styles.fontStyle = 'bold';
+            }
+          } else if (data.column.index >= 3 && data.column.index <= 7) {
             if (data.cell.raw === 'SI') {
               data.cell.styles.textColor = [16, 149, 79];
               data.cell.styles.fontStyle = 'bold';
@@ -463,8 +558,21 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
               <div className="text-3xl sm:text-4xl font-mono text-white font-bold tracking-tight">
                 {activos} <span className="text-base sm:text-lg text-neutral-500 font-sans font-normal">/ {totalClientes} cli</span>
               </div>
-              <div className="text-xs font-sans text-neutral-400 mt-1">
-                Faltan por activar: <span className="text-red-500 font-bold">{faltan} clientes</span>
+              <div className="text-xs font-sans text-neutral-400 mt-1 flex flex-wrap items-center gap-2">
+                <span>Faltan por activar:</span>
+                <button
+                  type="button"
+                  onClick={() => handleSelectMetricFilter('FALTANTES')}
+                  title="Clic para filtrar los clientes que faltan por vender"
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold transition-colors cursor-pointer ${
+                    statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                      ? 'bg-red-600 text-white shadow'
+                      : 'bg-red-950/50 text-red-400 border border-red-800/60 hover:bg-red-600 hover:text-white'
+                  }`}
+                >
+                  <XCircle className="w-3 h-3" />
+                  <span>{faltan} clientes (ver faltantes)</span>
+                </button>
               </div>
             </div>
             <div className="text-left sm:text-right">
@@ -596,19 +704,37 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
         </div>
 
         {/* Métricas Cards (Responsive Horizontal Scroll on Mobile) */}
-        <div className="p-4 md:p-5 bg-neutral-950">
+        <div className="p-4 md:p-5 bg-neutral-950 space-y-5">
           <div className="flex overflow-x-auto snap-x snap-mandatory scrollbar-hide gap-3 md:gap-4 md:grid md:grid-cols-3" style={{ WebkitOverflowScrolling: 'touch' }}>
              
-             {/* Card 1: Faltantes por activar */}
-             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden">
+             {/* Card 1: Faltantes por activar (< 5 rubros) */}
+             <div
+               role="button"
+               tabIndex={0}
+               onClick={() => handleSelectMetricFilter('FALTAN_RUBROS')}
+               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('FALTAN_RUBROS'); } }}
+               title="Clic para filtrar los clientes a los que les falta activar 1 o más rubros"
+               className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
+                 statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
+                   ? 'border-2 border-red-500 ring-2 ring-red-500/20 bg-gradient-to-b from-red-950/25 to-neutral-950 shadow-lg shadow-red-950/30'
+                   : 'border border-neutral-800 hover:border-red-600/60 hover:bg-neutral-900/30'
+               }`}
+             >
                 <div className="absolute -left-10 -bottom-10 w-32 h-32 bg-red-900/5 rounded-full blur-2xl"></div>
                 
                 <div className="flex justify-between items-start mb-4 relative z-10">
                    <h4 className="text-xs font-sans font-bold text-red-400 uppercase tracking-wider flex items-center gap-2">
                      <ShieldAlert className="w-4 h-4" /> Faltantes Por Activar
                    </h4>
-                   <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {totalClientes > 0 ? Math.round((faltantesPorActivar / totalClientes) * 100) : 0}% Cartera
+                   <div className="flex items-center gap-1.5">
+                     {statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter && (
+                       <span className="bg-red-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
+                         Filtro Activo
+                       </span>
+                     )}
+                     <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
+                       {totalClientes > 0 ? Math.round((faltantesPorActivar / totalClientes) * 100) : 0}% Cartera
+                     </div>
                    </div>
                 </div>
 
@@ -619,7 +745,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
 
                 <p className="text-[10px] md:text-xs font-sans text-neutral-400 mb-4 mt-1 leading-tight relative z-10">
-                   Les falta comprar 1 o más rubros para completar la activación de 5 rubros
+                   Les falta comprar 1 o más rubros para completar la activación de 5 rubros (toca para filtrar)
                 </p>
 
                 <div className="mt-auto relative z-10">
@@ -629,16 +755,34 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
              </div>
 
-             {/* Card 2: Sin ningún rubro */}
-             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden">
+             {/* Card 2: Sin ningún rubro (Faltan por activar / vender) */}
+             <div
+               role="button"
+               tabIndex={0}
+               onClick={() => handleSelectMetricFilter('FALTANTES')}
+               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('FALTANTES'); } }}
+               title="Clic para filtrar los clientes que faltan por activar (0 compras)"
+               className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
+                 statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                   ? 'border-2 border-red-500 ring-2 ring-red-500/20 bg-gradient-to-b from-red-950/25 to-neutral-950 shadow-lg shadow-red-950/30'
+                   : 'border border-neutral-800 hover:border-red-600/60 hover:bg-neutral-900/30'
+               }`}
+             >
                 <div className="absolute -left-10 -bottom-10 w-32 h-32 bg-red-900/5 rounded-full blur-2xl"></div>
 
                 <div className="flex justify-between items-start mb-4 relative z-10">
                    <h4 className="text-xs font-sans font-bold text-red-400 uppercase tracking-wider flex items-center gap-2">
                      <XCircle className="w-4 h-4" /> Sin Ningún Rubro (0/5)
                    </h4>
-                   <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {totalClientes > 0 ? Math.round((sinNingunRubro / totalClientes) * 100) : 0}% Cartera
+                   <div className="flex items-center gap-1.5">
+                     {statusFilter === 'FALTANTES' && !faltanteRubroFilter && (
+                       <span className="bg-red-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
+                         Filtro Activo
+                       </span>
+                     )}
+                     <div className="bg-red-950/40 border border-red-900/50 text-red-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
+                       {totalClientes > 0 ? Math.round((sinNingunRubro / totalClientes) * 100) : 0}% Cartera
+                     </div>
                    </div>
                 </div>
 
@@ -649,7 +793,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
 
                 <p className="text-[10px] md:text-xs font-sans text-neutral-400 mb-4 mt-1 leading-tight relative z-10">
-                   Atención prioritaria: clientes con 0 compras en la temporada
+                   Atención prioritaria: clientes con 0 compras en la temporada (toca para filtrar faltantes)
                 </p>
 
                 <div className="mt-auto relative z-10">
@@ -660,15 +804,33 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
              </div>
 
              {/* Card 3: 100% Activados */}
-             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden">
+             <div
+               role="button"
+               tabIndex={0}
+               onClick={() => handleSelectMetricFilter('CINCO_RUBROS')}
+               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectMetricFilter('CINCO_RUBROS'); } }}
+               title="Clic para filtrar los clientes 100% activados (5/5 rubros)"
+               className={`bg-neutral-950 rounded-xl p-4 md:p-5 flex flex-col min-w-[280px] sm:min-w-0 snap-start shrink-0 relative overflow-hidden cursor-pointer transition-all select-none ${
+                 statusFilter === 'CINCO_RUBROS' && !faltanteRubroFilter
+                   ? 'border-2 border-emerald-500 ring-2 ring-emerald-500/20 bg-gradient-to-b from-emerald-950/25 to-neutral-950 shadow-lg shadow-emerald-950/30'
+                   : 'border border-neutral-800 hover:border-emerald-600/60 hover:bg-neutral-900/30'
+               }`}
+             >
                 <div className="absolute -left-10 -bottom-10 w-32 h-32 bg-emerald-900/5 rounded-full blur-2xl"></div>
 
                 <div className="flex justify-between items-start mb-4 relative z-10">
                    <h4 className="text-xs font-sans font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
                      <CheckCircle2 className="w-4 h-4" /> 100% Activados (5/5)
                    </h4>
-                   <div className="bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
-                     {totalClientes > 0 ? Math.round((cienPorCientoActivados / totalClientes) * 100) : 0}% Cobertura
+                   <div className="flex items-center gap-1.5">
+                     {statusFilter === 'CINCO_RUBROS' && !faltanteRubroFilter && (
+                       <span className="bg-emerald-600 text-white text-[9px] font-sans font-extrabold px-2 py-0.5 rounded-full uppercase">
+                         Filtro Activo
+                       </span>
+                     )}
+                     <div className="bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 text-[9px] md:text-[10px] font-sans font-bold px-2 py-1 rounded-full">
+                       {totalClientes > 0 ? Math.round((cienPorCientoActivados / totalClientes) * 100) : 0}% Cobertura
+                     </div>
                    </div>
                 </div>
 
@@ -679,7 +841,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                 </div>
 
                 <p className="text-[10px] md:text-xs font-sans text-neutral-400 mb-4 mt-1 leading-tight relative z-10">
-                   Clientes meta: cuentan con compras en los 5 rubros del programa
+                   Clientes meta: cuentan con compras en los 5 rubros del programa (toca para filtrar)
                 </p>
 
                 <div className="mt-auto relative z-10">
@@ -690,12 +852,234 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
              </div>
 
           </div>
+
+          {/* TABLA DE MÉTRICAS: CARTERA DE CLIENTES VS LO QUE FALTA POR ACTIVAR */}
+          <div className="border border-neutral-800 rounded-xl overflow-hidden bg-neutral-900/20">
+            <div className="p-3.5 md:p-4 border-b border-neutral-800 bg-neutral-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 text-red-500 shrink-0" />
+                <div>
+                  <h4 className="text-xs md:text-sm font-sans font-bold text-white uppercase tracking-wider">
+                    Tabla de Métricas: Cartera de Clientes vs Faltantes por Activar
+                  </h4>
+                  <p className="text-[10px] md:text-xs font-sans text-neutral-400">
+                    Selecciona cualquier métrica o botón <span className="text-red-400 font-bold">“Filtrar Faltantes”</span> para ver abajo únicamente los clientes que te faltan por vender.
+                  </p>
+                </div>
+              </div>
+              {(statusFilter !== 'TODOS' || faltanteRubroFilter !== null) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter('TODOS');
+                    setFaltanteRubroFilter(null);
+                  }}
+                  className="self-start sm:self-auto px-3 py-1.5 rounded-lg text-[11px] font-sans font-bold bg-neutral-800 hover:bg-neutral-700 text-white border border-neutral-600 transition-colors cursor-pointer shrink-0"
+                >
+                  Mostrar Cartera Completa ({totalClientes})
+                </button>
+              )}
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[720px]">
+                <thead>
+                  <tr className="bg-neutral-900 border-b border-neutral-800 text-[10px] md:text-xs font-sans text-neutral-400 uppercase tracking-wider">
+                    <th className="p-3 font-bold text-white border-r border-neutral-800">Métrica / Rubro</th>
+                    <th className="p-3 font-bold text-center border-r border-neutral-800 w-32">Clientes en Cartera</th>
+                    <th className="p-3 font-bold text-center text-emerald-400 border-r border-neutral-800 w-32">Ya Activados</th>
+                    <th className="p-3 font-bold text-center text-red-400 border-r border-neutral-800 w-36">Faltan por Activar</th>
+                    <th className="p-3 font-bold text-center border-r border-neutral-800 w-32">% Avance</th>
+                    <th className="p-3 font-bold text-center w-44">Acción / Filtro Rápido</th>
+                  </tr>
+                </thead>
+                <tbody className="text-xs font-mono">
+                  {/* Fila Principal: ACTIVACIÓN GENERAL DE CARTERA */}
+                  <tr
+                    onClick={() => handleSelectMetricFilter('FALTANTES')}
+                    title="Clic para filtrar los clientes que faltan por vender (0 compras)"
+                    className={`border-b border-neutral-800 cursor-pointer transition-colors ${
+                      statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                        ? 'bg-red-950/35 hover:bg-red-950/45'
+                        : 'bg-neutral-950 hover:bg-neutral-900/60'
+                    }`}
+                  >
+                    <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-red-500 shrink-0" />
+                        <div>
+                          <div className="uppercase tracking-wide">Activación General (Cartera Total vs Faltantes)</div>
+                          <div className="text-[10px] font-normal text-neutral-400">Clientes con al menos 1 compra vs clientes en 0 compras</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3 text-center font-bold text-white border-r border-neutral-800 text-sm">
+                      {totalClientes} <span className="text-[10px] font-sans font-normal text-neutral-500">cli</span>
+                    </td>
+                    <td
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectMetricFilter('ACTIVOS');
+                      }}
+                      title="Clic para ver solo los clientes ya activados"
+                      className="p-3 text-center font-bold text-emerald-400 border-r border-neutral-800 text-sm hover:bg-emerald-950/30"
+                    >
+                      {activos} <span className="text-[10px] font-sans font-normal text-neutral-400">cli</span>
+                    </td>
+                    <td className="p-3 text-center font-extrabold text-red-400 border-r border-neutral-800 text-sm bg-red-950/15">
+                      {faltan} <span className="text-[10px] font-sans font-normal text-red-300">faltan</span>
+                    </td>
+                    <td className="p-3 text-center border-r border-neutral-800">
+                      <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${porcentaje >= 80 ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-amber-900/50 bg-amber-950/40 text-amber-400'}`}>
+                        {porcentaje.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="p-3 text-center font-sans">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectMetricFilter('FALTANTES');
+                        }}
+                        className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          statusFilter === 'FALTANTES' && !faltanteRubroFilter
+                            ? 'bg-red-600 text-white border-red-400 shadow-[0_0_12px_rgba(220,38,38,0.45)]'
+                            : 'bg-red-950/40 hover:bg-red-600 text-red-300 hover:text-white border-red-800/70'
+                        }`}
+                      >
+                        <XCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{statusFilter === 'FALTANTES' && !faltanteRubroFilter ? `Mostrando Faltantes (${faltan})` : `Ver Faltantes (${faltan})`}</span>
+                      </button>
+                    </td>
+                  </tr>
+
+                  {/* Fila Secundaria: FALTANTES POR COMPLETAR 5 RUBROS */}
+                  <tr
+                    onClick={() => handleSelectMetricFilter('FALTAN_RUBROS')}
+                    title="Clic para filtrar los clientes a los que aún les falta algún rubro (< 5 rubros)"
+                    className={`border-b border-neutral-800 cursor-pointer transition-colors ${
+                      statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
+                        ? 'bg-amber-950/30 hover:bg-amber-950/40'
+                        : 'bg-neutral-950/60 hover:bg-neutral-900/60'
+                    }`}
+                  >
+                    <td className="p-3 font-sans font-bold text-neutral-200 border-r border-neutral-800">
+                      <div className="flex items-center gap-2">
+                        <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                        <div>
+                          <div className="uppercase tracking-wide">Cobertura Completa 5/5 vs Con Rubros Pendientes</div>
+                          <div className="text-[10px] font-normal text-neutral-400">Clientes con los 5 rubros vs clientes que les falta 1 o más rubros</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3 text-center font-bold text-white border-r border-neutral-800">
+                      {totalClientes} <span className="text-[10px] font-sans font-normal text-neutral-500">cli</span>
+                    </td>
+                    <td
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectMetricFilter('CINCO_RUBROS');
+                      }}
+                      title="Clic para ver clientes con los 5 rubros completos"
+                      className="p-3 text-center font-bold text-emerald-400 border-r border-neutral-800 hover:bg-emerald-950/30"
+                    >
+                      {cienPorCientoActivados} <span className="text-[10px] font-sans font-normal text-neutral-400">(5/5)</span>
+                    </td>
+                    <td className="p-3 text-center font-bold text-amber-400 border-r border-neutral-800 bg-amber-950/10">
+                      {faltantesPorActivar} <span className="text-[10px] font-sans font-normal text-amber-300">(&lt;5 rubros)</span>
+                    </td>
+                    <td className="p-3 text-center border-r border-neutral-800">
+                      <span className="px-2 py-0.5 rounded border border-neutral-700 bg-neutral-900 text-neutral-300 text-[11px] font-bold">
+                        {totalClientes > 0 ? ((cienPorCientoActivados / totalClientes) * 100).toFixed(1) : '0.0'}%
+                      </span>
+                    </td>
+                    <td className="p-3 text-center font-sans">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectMetricFilter('FALTAN_RUBROS');
+                        }}
+                        className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter
+                            ? 'bg-amber-600 text-white border-amber-400'
+                            : 'bg-amber-950/40 hover:bg-amber-600 text-amber-300 hover:text-white border-amber-800/70'
+                        }`}
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                        <span>{statusFilter === 'FALTAN_RUBROS' && !faltanteRubroFilter ? `Mostrando (${faltantesPorActivar})` : `Ver <5 Rubros (${faltantesPorActivar})`}</span>
+                      </button>
+                    </td>
+                  </tr>
+
+                  {/* Desglose por cada uno de los 5 Rubros (Cartera vs Activos vs Faltan en ese rubro) */}
+                  {rubroCarteraMetrics.map((rm) => {
+                    const isSelectedFaltante = faltanteRubroFilter === rm.rCode;
+                    const rTheme = getRubroTheme(rm.rCode);
+                    const IconComp = rTheme.icon;
+                    return (
+                      <tr
+                        key={rm.rCode}
+                        onClick={() => handleSelectRubroFaltante(rm.rCode)}
+                        title={`Clic para filtrar los ${rm.faltan} clientes que faltan por comprar ${rm.label}`}
+                        className={`border-b border-neutral-800/70 cursor-pointer transition-colors ${
+                          isSelectedFaltante ? 'bg-red-950/30 hover:bg-red-950/40' : 'hover:bg-neutral-900/50'
+                        }`}
+                      >
+                        <td className="p-2.5 pl-4 font-sans font-bold text-neutral-300 border-r border-neutral-800">
+                          <div className="flex items-center gap-2">
+                            <IconComp className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                            <span>Rubro: <strong className="text-white">{rm.label}</strong></span>
+                          </div>
+                        </td>
+                        <td className="p-2.5 text-center text-neutral-300 border-r border-neutral-800">
+                          {rm.cartera} <span className="text-[10px] font-sans text-neutral-500">cli</span>
+                        </td>
+                        <td
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleRubro360(rm.rCode, false);
+                          }}
+                          title={`Clic para ver los ${rm.activos} clientes activos en ${rm.label}`}
+                          className="p-2.5 text-center font-bold text-emerald-400 border-r border-neutral-800 hover:bg-emerald-950/30"
+                        >
+                          {rm.activos} <span className="text-[10px] font-sans font-normal text-neutral-400">activos</span>
+                        </td>
+                        <td className="p-2.5 text-center font-bold text-red-400 border-r border-neutral-800 bg-red-950/10">
+                          {rm.faltan} <span className="text-[10px] font-sans font-normal text-red-300">faltan</span>
+                        </td>
+                        <td className="p-2.5 text-center border-r border-neutral-800">
+                          <span className="text-[11px] font-bold text-neutral-300">{rm.porcentaje.toFixed(1)}%</span>
+                        </td>
+                        <td className="p-2.5 text-center font-sans">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectRubroFaltante(rm.rCode);
+                            }}
+                            className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all cursor-pointer ${
+                              isSelectedFaltante
+                                ? 'bg-red-600 text-white border-red-400'
+                                : 'bg-neutral-900 hover:bg-red-950/60 text-neutral-300 hover:text-red-200 border-neutral-700 hover:border-red-700'
+                            }`}
+                          >
+                            <span>{isSelectedFaltante ? `Ocultar Faltantes (${rm.faltan})` : `Filtrar Faltantes (${rm.faltan})`}</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
       </div>
 
       {/* SECTION 3: DETALLE DE COBERTURA POR CLIENTE */}
-      <div className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
+      <div ref={clientTableRef} className="bg-neutral-950 border border-neutral-800 rounded-xl overflow-hidden mt-6 flex flex-col">
          <div className="p-4 md:p-5 border-b border-neutral-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
            <div className="flex items-center gap-2">
              <LayoutList className="w-4 h-4 text-white bg-red-600 p-1 box-content rounded" />
@@ -704,7 +1088,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                  Detalle de Cobertura por Cliente
                </h2>
                <p className="text-[11px] font-sans text-neutral-400">
-                 Tilda uno o varios rubros arriba para <strong>filtrar clientes activos y ver su Dashboard 360°</strong>, o toca los rubros de un cliente para <strong>activarlos en verde</strong>.
+                 Tilda uno o varios rubros arriba para <strong>filtrar clientes activos y ver su Dashboard 360°</strong>, selecciona una métrica para <strong>filtrar los clientes faltantes</strong>, o toca los rubros de un cliente para <strong>activarlos en verde</strong>.
                </p>
              </div>
            </div>
@@ -767,13 +1151,70 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
            </div>
          )}
 
+         {(statusFilter !== 'TODOS' || faltanteRubroFilter !== null) && (
+           <div className="px-4 py-2.5 bg-red-950/30 border-b border-red-900/50 flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
+             <div className="flex flex-wrap items-center gap-2 text-red-200">
+               <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+               <span>
+                 {faltanteRubroFilter ? (
+                   <>
+                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes que <strong>faltan por vender en {RUBRO_LABEL[faltanteRubroFilter]}</strong>
+                   </>
+                 ) : statusFilter === 'FALTANTES' ? (
+                   <>
+                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes que <strong>faltan por activar / vender (0 compras)</strong>
+                   </>
+                 ) : statusFilter === 'ACTIVOS' ? (
+                   <>
+                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes <strong>ya activados (≥ 1 rubro)</strong>
+                   </>
+                 ) : statusFilter === 'FALTAN_RUBROS' ? (
+                   <>
+                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes con <strong>rubros pendientes por activar (&lt; 5 rubros)</strong>
+                   </>
+                 ) : (
+                   <>
+                     Filtro activo: Mostrando <strong>{displayedClients.length}</strong> de <strong>{totalClientes}</strong> clientes <strong>100% activados (5/5 rubros)</strong>
+                   </>
+                 )}
+               </span>
+             </div>
+             <button
+               type="button"
+               onClick={() => {
+                 setStatusFilter('TODOS');
+                 setFaltanteRubroFilter(null);
+               }}
+               className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 transition-colors cursor-pointer"
+             >
+               Quitar filtro · Ver todos ({totalClientes})
+             </button>
+           </div>
+         )}
+
          {/* Desktop View: Table */}
          {viewMode !== 'tarjetas' && (<div className="hidden md:block overflow-x-auto">
-           <table className="w-full text-left border-collapse min-w-[900px]">
+           <table className="w-full text-left border-collapse min-w-[1000px]">
               <thead>
                  <tr className="bg-[#b90000] text-[10px] font-sans text-white uppercase tracking-wider">
                    <th className="p-3 font-bold border-r border-[#a00000] w-20 text-center">Codigo</th>
                    <th className="p-3 font-bold border-r border-[#a00000]">Razon Social</th>
+                   <th
+                     onClick={() => handleSelectMetricFilter('FALTANTES', false)}
+                     title="Clic para filtrar clientes que faltan por vender (o volver a todos)"
+                     className={`p-3 font-bold text-center border-r border-[#a00000] w-36 cursor-pointer transition-colors ${
+                       statusFilter === 'FALTANTES' ? 'bg-red-950 text-amber-300' : 'hover:bg-red-800'
+                     }`}
+                   >
+                     <div className="flex flex-col items-center leading-tight">
+                       <span className="inline-flex items-center gap-1">
+                         <Users className="w-3 h-3" /> Activación General
+                       </span>
+                       <span className="text-[9px] font-mono text-red-100 mt-0.5">
+                         Act: {activos}/{totalClientes} · Falta: {faltan}
+                       </span>
+                     </div>
+                   </th>
                    <th onClick={() => toggleRubro360('ACEITE')} title="Filtrar clientes activos y ver Historial 360° de Aceite" className={`p-3 font-bold text-center border-r border-[#a00000] w-24 cursor-pointer transition-colors ${selectedRubros.includes('ACEITE') ? 'bg-emerald-800 text-white' : 'hover:bg-red-800'}`}>
                      <span className="inline-flex items-center gap-1">{selectedRubros.includes('ACEITE') ? <CheckSquare className="w-3 h-3" /> : <Activity className="w-3 h-3 opacity-75" />} Aceite</span>
                    </th>
@@ -795,7 +1236,7 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
               <tbody className="text-xs font-mono">
                 {displayedClients.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center bg-[#0d0d0d] text-neutral-400 font-sans">
+                    <td colSpan={9} className="p-8 text-center bg-[#0d0d0d] text-neutral-400 font-sans">
                       <Users className="w-8 h-8 mx-auto text-neutral-600 mb-2" />
                       <div className="text-white font-bold text-sm">No se encontraron clientes</div>
                       <div className="text-xs text-neutral-500 mt-1">
@@ -831,7 +1272,8 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                        </td>
                     );
 
-                    const badgeColor = client.cobertura > 0
+                    const isClientActive = client.cobertura > 0;
+                    const badgeColor = isClientActive
                       ? 'border-emerald-300 bg-emerald-600 text-white shadow-[0_0_12px_rgba(16,185,129,0.45)]'
                       : 'border-red-900/50 bg-red-950/40 text-red-400';
                     
@@ -841,6 +1283,25 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                        <tr key={client.codigo} className={`${bgClass} border-b border-neutral-800/50 hover:bg-neutral-900/50 transition-colors`}>
                           <td translate="no" className="p-3 border-r border-neutral-800/50 text-white font-sans text-center font-bold">{client.codigo}</td>
                           <td className="p-3 border-r border-neutral-800/50 font-sans font-bold text-white uppercase">{client.razonSocial}</td>
+                          <td className="p-3 text-center border-r border-neutral-800/50">
+                            {isClientActive ? (
+                              <span
+                                translate="no"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-emerald-300 bg-emerald-600 text-white text-[10px] font-extrabold shadow-[0_0_10px_rgba(16,185,129,0.35)]"
+                              >
+                                <CheckCircle2 className="w-3 h-3 text-white shrink-0" />
+                                <span>ACTIVO</span>
+                              </span>
+                            ) : (
+                              <span
+                                translate="no"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-red-800/70 bg-red-950/50 text-red-400 text-[10px] font-extrabold"
+                              >
+                                <XCircle className="w-3 h-3 text-red-400 shrink-0" />
+                                <span>FALTA VENDER</span>
+                              </span>
+                            )}
+                          </td>
                           {getCell(client.hasAceite, 'ACEITE')}
                           {getCell(client.hasAzucar, 'AZUCAR')}
                           {getCell(client.hasPollo, 'POLLO')}
@@ -859,6 +1320,28 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                        </tr>
                     );
                   })
+                )}
+                {displayedClients.length > 0 && (
+                  <tr className="bg-neutral-900 border-t-2 border-red-900/60 font-bold text-xs">
+                    <td className="p-3 text-center text-red-400 border-r border-neutral-800 font-sans">TOTAL</td>
+                    <td className="p-3 font-sans text-white border-r border-neutral-800">
+                      CARTERA EN LISTADO: <span className="text-emerald-400">{displayedClients.length}</span> de <span className="text-white">{totalClientes}</span> clientes
+                    </td>
+                    <td className="p-3 text-center border-r border-neutral-800 font-sans text-[11px]">
+                      <div className="flex flex-col items-center leading-tight">
+                        <span className="text-emerald-400">Activos: {displayedClients.filter(c => c.cobertura > 0).length}</span>
+                        <span className="text-red-400">Faltan: {displayedClients.filter(c => c.cobertura === 0).length}</span>
+                      </div>
+                    </td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{displayedClients.filter(c => c.hasAceite).length}</td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{displayedClients.filter(c => c.hasAzucar).length}</td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{displayedClients.filter(c => c.hasPollo).length}</td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{displayedClients.filter(c => c.hasEstandarAsturias).length}</td>
+                    <td className="p-3 text-center text-emerald-400 border-r border-neutral-800">{displayedClients.filter(c => c.hasMortadelaSalpicao).length}</td>
+                    <td className="p-3 text-center text-amber-400">
+                      {((displayedClients.filter(c => c.cobertura > 0).length / displayedClients.length) * 100).toFixed(1)}%
+                    </td>
+                  </tr>
                 )}
               </tbody>
            </table>
@@ -918,16 +1401,35 @@ export const ActivacionClientes: React.FC<Props> = ({ filteredVolumen, filteredA
                         : 'bg-neutral-900 border border-neutral-800'
                     }`}
                   >
-                     <div className="flex justify-between items-start mb-2">
+                     <div className="flex justify-between items-start mb-2 gap-2">
                         <span translate="no" className="text-neutral-300 font-mono text-xs font-bold">{client.codigo}</span>
-                        <span
-                          key={`${client.codigo}-badge-${client.cobertura}`}
-                          translate="no"
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-extrabold ${badgeColor}`}
-                        >
-                           {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-white shrink-0" />}
-                           <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5 justify-end">
+                          {client.cobertura > 0 ? (
+                            <span
+                              translate="no"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-emerald-300 bg-emerald-600 text-white text-[10px] font-sans font-extrabold"
+                            >
+                              <CheckCircle2 className="w-3 h-3 text-white shrink-0" />
+                              <span>ACTIVO</span>
+                            </span>
+                          ) : (
+                            <span
+                              translate="no"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-red-800/70 bg-red-950/50 text-red-400 text-[10px] font-sans font-extrabold"
+                            >
+                              <XCircle className="w-3 h-3 text-red-400 shrink-0" />
+                              <span>FALTA VENDER</span>
+                            </span>
+                          )}
+                          <span
+                            key={`${client.codigo}-badge-${client.cobertura}`}
+                            translate="no"
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-extrabold ${badgeColor}`}
+                          >
+                             {client.cobertura > 0 && <CheckCircle2 className="w-3 h-3 text-white shrink-0" />}
+                             <span>{`${client.cobertura}/5 (${percentage}%)`}</span>
+                          </span>
+                        </div>
                      </div>
                      
                      <h4 className="text-white font-sans text-sm font-bold mb-3 uppercase leading-tight">
