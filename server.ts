@@ -220,7 +220,7 @@ async function startServer() {
     'SAIRU VALLES': { password: '18383237', role: 'VENDEDOR', vendorId: '26' },
     'ELISA SOLER': { password: '12330043', role: 'VENDEDOR', vendorId: '28' },
     'ALI PEREZ': { password: '19117934', role: 'SUPERVISOR', vendorId: 'SUPERVISOR_ALI_PEREZ' },
-    'ANGEL NAVARRO': { password: '19117934', role: 'VENDEDOR', vendorId: '29' },
+    'ANGEL NAVARRO': { password: '25468939', role: 'VENDEDOR', vendorId: '29' },
     'MARIANGEL GONZALEZ': { password: '20552780', role: 'VENDEDOR', vendorId: '47' },
     'VICTOR CAMPOS': { password: '19944329', role: 'VENDEDOR', vendorId: '48' },
     'J PABLO ARAUJO': { password: '15239697', role: 'VENDEDOR', vendorId: '31' },
@@ -243,7 +243,30 @@ async function startServer() {
       const usuarioUpper = String(username).toUpperCase().trim();
       const pwd = String(password).trim();
       const pwdClean = pwd.replace(/\D/g, '');
-      const isNewFalconVendor = ['ANGEL NAVARRO', 'MARIANGEL GONZALEZ', 'VICTOR CAMPOS'].includes(usuarioUpper);
+      const normalizeForAuth = (s: string) => {
+        return s
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/Ñ/gi, 'N')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toUpperCase();
+      };
+
+      const usuarioNorm = normalizeForAuth(usuarioUpper);
+      let creds = VENDOR_SERVER_CREDENTIALS[usuarioUpper];
+      let matchedCanonicalKey = usuarioUpper;
+      if (!creds) {
+        for (const [key, val] of Object.entries(VENDOR_SERVER_CREDENTIALS)) {
+          if (normalizeForAuth(key) === usuarioNorm) {
+            creds = val;
+            matchedCanonicalKey = key;
+            break;
+          }
+        }
+      }
+
+      const isNewFalconVendor = ['ANGEL NAVARRO', 'MARIANGEL GONZALEZ', 'VICTOR CAMPOS'].includes(matchedCanonicalKey);
 
       // 1. Intentar autenticación contra Supabase si la tabla existe
       if (supabase) {
@@ -251,7 +274,7 @@ async function startServer() {
           const { data: supaUser, error: supaErr } = await supabase
             .from('usuarios')
             .select('*')
-            .eq('username', usuarioUpper)
+            .in('username', [usuarioUpper, matchedCanonicalKey])
             .maybeSingle();
 
           if (!supaErr && supaUser) {
@@ -263,7 +286,12 @@ async function startServer() {
               isValid =
                 pwd === supaUser.password_hash ||
                 pwdClean === supaUser.password_hash ||
+                (creds && (pwd === creds.password || pwdClean === creds.password)) ||
+                (matchedCanonicalKey === 'ANGEL NAVARRO' && pwdClean === '25468939') ||
                 (isNewFalconVendor && (pwdClean === '19117934' || pwd === '123' || pwdClean === String(supaUser.vendor_id || '')));
+            }
+            if (!isValid && creds && (pwd === creds.password || pwdClean === creds.password)) {
+              isValid = true;
             }
 
             if (isValid) {
@@ -271,7 +299,7 @@ async function startServer() {
               const resolvedRole = supProfile ? 'SUPERVISOR' : supaUser.role;
               const token = jwt.sign(
                 {
-                  username: supaUser.username,
+                  username: matchedCanonicalKey || supaUser.username,
                   role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
@@ -283,7 +311,7 @@ async function startServer() {
                 success: true,
                 token,
                 user: {
-                  username: supaUser.username,
+                  username: matchedCanonicalKey || supaUser.username,
                   role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
@@ -298,35 +326,15 @@ async function startServer() {
         }
       }
 
-      const normalizeForAuth = (s: string) => {
-        return s
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/Ñ/gi, 'N')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .toUpperCase();
-      };
-
-      const usuarioNorm = normalizeForAuth(usuarioUpper);
-      let creds = VENDOR_SERVER_CREDENTIALS[usuarioUpper];
-      if (!creds) {
-        for (const [key, val] of Object.entries(VENDOR_SERVER_CREDENTIALS)) {
-          if (normalizeForAuth(key) === usuarioNorm) {
-            creds = val;
-            break;
-          }
-        }
-      }
-
       if (!creds) {
         return res.status(401).json({ success: false, error: 'Usuario no autorizado o no encontrado en la base de datos' });
       }
 
-      const isMikel = usuarioUpper.includes('MIKELANGELO') || usuarioUpper.includes('SOTO') || usuarioUpper.includes('JOHNATAN');
+      const isMikel = matchedCanonicalKey.includes('MIKELANGELO') || matchedCanonicalKey.includes('SOTO') || matchedCanonicalKey.includes('JOHNATAN');
       const isValidPwd =
         pwd === creds.password ||
         pwdClean === creds.password ||
+        (matchedCanonicalKey === 'ANGEL NAVARRO' && pwdClean === '25468939') ||
         (isMikel && (pwdClean === '20863632' || pwdClean === '18395226')) ||
         (isNewFalconVendor && (pwdClean === '19117934' || pwd === '123' || pwdClean === creds.vendorId));
 
@@ -336,7 +344,7 @@ async function startServer() {
 
       const token = jwt.sign(
         {
-          username: usuarioUpper,
+          username: matchedCanonicalKey,
           role: creds.role,
           vendorId: creds.vendorId
         },
@@ -348,7 +356,7 @@ async function startServer() {
         success: true,
         token,
         user: {
-          username: usuarioUpper,
+          username: matchedCanonicalKey,
           role: creds.role,
           vendorId: creds.vendorId
         },
