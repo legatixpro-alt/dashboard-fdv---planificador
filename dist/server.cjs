@@ -585,7 +585,7 @@ async function startServer() {
     "SAIRU VALLES": { password: "18383237", role: "VENDEDOR", vendorId: "26" },
     "ELISA SOLER": { password: "12330043", role: "VENDEDOR", vendorId: "28" },
     "ALI PEREZ": { password: "19117934", role: "SUPERVISOR", vendorId: "SUPERVISOR_ALI_PEREZ" },
-    "ANGEL NAVARRO": { password: "19117934", role: "VENDEDOR", vendorId: "29" },
+    "ANGEL NAVARRO": { password: "25468939", role: "VENDEDOR", vendorId: "29" },
     "MARIANGEL GONZALEZ": { password: "20552780", role: "VENDEDOR", vendorId: "47" },
     "VICTOR CAMPOS": { password: "19944329", role: "VENDEDOR", vendorId: "48" },
     "J PABLO ARAUJO": { password: "15239697", role: "VENDEDOR", vendorId: "31" },
@@ -606,24 +606,42 @@ async function startServer() {
       const usuarioUpper = String(username).toUpperCase().trim();
       const pwd = String(password).trim();
       const pwdClean = pwd.replace(/\D/g, "");
-      const isNewFalconVendor = ["ANGEL NAVARRO", "MARIANGEL GONZALEZ", "VICTOR CAMPOS"].includes(usuarioUpper);
+      const normalizeForAuth = (s) => {
+        return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ñ/gi, "N").replace(/\s+/g, " ").trim().toUpperCase();
+      };
+      const usuarioNorm = normalizeForAuth(usuarioUpper);
+      let creds = VENDOR_SERVER_CREDENTIALS[usuarioUpper];
+      let matchedCanonicalKey = usuarioUpper;
+      if (!creds) {
+        for (const [key, val] of Object.entries(VENDOR_SERVER_CREDENTIALS)) {
+          if (normalizeForAuth(key) === usuarioNorm) {
+            creds = val;
+            matchedCanonicalKey = key;
+            break;
+          }
+        }
+      }
+      const isNewFalconVendor = ["ANGEL NAVARRO", "MARIANGEL GONZALEZ", "VICTOR CAMPOS"].includes(matchedCanonicalKey);
       if (supabase) {
         try {
-          const { data: supaUser, error: supaErr } = await supabase.from("usuarios").select("*").eq("username", usuarioUpper).maybeSingle();
+          const { data: supaUser, error: supaErr } = await supabase.from("usuarios").select("*").in("username", [usuarioUpper, matchedCanonicalKey]).maybeSingle();
           if (!supaErr && supaUser) {
             const isBcrypt = supaUser.password_hash && supaUser.password_hash.startsWith("$2");
             let isValid = false;
             if (isBcrypt) {
               isValid = await import_bcryptjs.default.compare(pwd, supaUser.password_hash) || await import_bcryptjs.default.compare(pwdClean, supaUser.password_hash);
             } else {
-              isValid = pwd === supaUser.password_hash || pwdClean === supaUser.password_hash || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === String(supaUser.vendor_id || ""));
+              isValid = pwd === supaUser.password_hash || pwdClean === supaUser.password_hash || creds && (pwd === creds.password || pwdClean === creds.password) || matchedCanonicalKey === "ANGEL NAVARRO" && pwdClean === "25468939" || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === String(supaUser.vendor_id || ""));
+            }
+            if (!isValid && creds && (pwd === creds.password || pwdClean === creds.password)) {
+              isValid = true;
             }
             if (isValid) {
               const supProfile = getSupervisorProfile(supaUser.username);
               const resolvedRole = supProfile ? "SUPERVISOR" : supaUser.role;
               const token2 = import_jsonwebtoken.default.sign(
                 {
-                  username: supaUser.username,
+                  username: matchedCanonicalKey || supaUser.username,
                   role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
@@ -634,7 +652,7 @@ async function startServer() {
                 success: true,
                 token: token2,
                 user: {
-                  username: supaUser.username,
+                  username: matchedCanonicalKey || supaUser.username,
                   role: resolvedRole,
                   vendorId: supaUser.vendor_id
                 },
@@ -647,30 +665,17 @@ async function startServer() {
         } catch (e) {
         }
       }
-      const normalizeForAuth = (s) => {
-        return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Ñ/gi, "N").replace(/\s+/g, " ").trim().toUpperCase();
-      };
-      const usuarioNorm = normalizeForAuth(usuarioUpper);
-      let creds = VENDOR_SERVER_CREDENTIALS[usuarioUpper];
-      if (!creds) {
-        for (const [key, val] of Object.entries(VENDOR_SERVER_CREDENTIALS)) {
-          if (normalizeForAuth(key) === usuarioNorm) {
-            creds = val;
-            break;
-          }
-        }
-      }
       if (!creds) {
         return res.status(401).json({ success: false, error: "Usuario no autorizado o no encontrado en la base de datos" });
       }
-      const isMikel = usuarioUpper.includes("MIKELANGELO") || usuarioUpper.includes("SOTO") || usuarioUpper.includes("JOHNATAN");
-      const isValidPwd = pwd === creds.password || pwdClean === creds.password || isMikel && (pwdClean === "20863632" || pwdClean === "18395226") || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === creds.vendorId);
+      const isMikel = matchedCanonicalKey.includes("MIKELANGELO") || matchedCanonicalKey.includes("SOTO") || matchedCanonicalKey.includes("JOHNATAN");
+      const isValidPwd = pwd === creds.password || pwdClean === creds.password || matchedCanonicalKey === "ANGEL NAVARRO" && pwdClean === "25468939" || isMikel && (pwdClean === "20863632" || pwdClean === "18395226") || isNewFalconVendor && (pwdClean === "19117934" || pwd === "123" || pwdClean === creds.vendorId);
       if (!isValidPwd) {
         return res.status(401).json({ success: false, error: "Contrase\xF1a incorrecta" });
       }
       const token = import_jsonwebtoken.default.sign(
         {
-          username: usuarioUpper,
+          username: matchedCanonicalKey,
           role: creds.role,
           vendorId: creds.vendorId
         },
@@ -681,7 +686,7 @@ async function startServer() {
         success: true,
         token,
         user: {
-          username: usuarioUpper,
+          username: matchedCanonicalKey,
           role: creds.role,
           vendorId: creds.vendorId
         },
@@ -4420,6 +4425,16 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       res.status(500).json([]);
     }
   });
+  const sharedReceiptsMemoryStore = /* @__PURE__ */ new Map();
+  app2.get("/api/shared-receipt-temp/:id", (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const entry = sharedReceiptsMemoryStore.get(id);
+    if (!entry) {
+      return res.status(404).json({ error: "Comprobante temporal expirado o ya consumido" });
+    }
+    sharedReceiptsMemoryStore.delete(id);
+    return res.json(entry);
+  });
   app2.post("/share-target-cobro", import_express.default.raw({ type: "*/*", limit: "25mb" }), (req, res) => {
     try {
       const contentType = String(req.headers["content-type"] || "");
@@ -4428,6 +4443,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       let dataUrl = "";
       let fileName = "soporte_whatsapp.jpg";
       let mimeType = "image/jpeg";
+      let fileSize = 0;
       if (boundaryMatch && rawBody.length > 0) {
         const boundary = "--" + (boundaryMatch[1] || boundaryMatch[2]).trim();
         const latin = rawBody.toString("latin1");
@@ -4444,6 +4460,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
               if (bodyLatin.endsWith("\r\n")) bodyLatin = bodyLatin.slice(0, -2);
               const fileBuf = Buffer.from(bodyLatin, "latin1");
               if (fileBuf.length > 0) {
+                fileSize = fileBuf.length;
                 const lowerFn = fileName.toLowerCase();
                 if (lowerFn.endsWith(".pdf") || fileBuf.subarray(0, 4).toString("ascii") === "%PDF") {
                   mimeType = "application/pdf";
@@ -4451,7 +4468,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                   mimeType = "image/png";
                 } else if (lowerFn.endsWith(".webp")) {
                   mimeType = "image/webp";
-                } else if (lowerFn.endsWith(".heic")) {
+                } else if (lowerFn.endsWith(".heic") || lowerFn.endsWith(".heif")) {
                   mimeType = "image/heic";
                 } else if (!mimeType || mimeType === "application/octet-stream") {
                   mimeType = "image/jpeg";
@@ -4463,25 +4480,87 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
           }
         }
       }
+      const tempReceiptId = `rcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      if (dataUrl) {
+        const now = Date.now();
+        for (const [k, v] of sharedReceiptsMemoryStore.entries()) {
+          if (now - v.timestamp > 10 * 60 * 1e3) sharedReceiptsMemoryStore.delete(k);
+        }
+        sharedReceiptsMemoryStore.set(tempReceiptId, {
+          dataUrl,
+          name: fileName,
+          type: mimeType,
+          size: fileSize,
+          timestamp: now
+        });
+      }
       const payloadJson = JSON.stringify({
         dataUrl,
         name: fileName,
         type: mimeType,
+        size: fileSize,
+        receiptId: tempReceiptId,
         timestamp: Date.now()
       });
       res.status(200).setHeader("Content-Type", "text/html; charset=utf-8").send(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Recibiendo comprobante de WhatsApp...</title></head>
-<body style="background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recibiendo comprobante de WhatsApp...</title></head>
+<body style="background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;gap:12px">
+<div style="width:32px;height:32px;border:3px solid #10b981;border-top-color:transparent;border-radius:50%;animation:s 0.8s linear infinite"></div>
+<style>@keyframes s{to{transform:rotate(360deg)}}</style>
+<div style="font-size:14px;font-weight:bold;color:#10b981">Procesando soporte desde WhatsApp...</div>
 <script>
-try {
+(async function() {
   var payload = ${payloadJson};
-  if (payload && payload.dataUrl) {
-    localStorage.setItem('fdv_shared_whatsapp_payload', JSON.stringify(payload));
-  }
-} catch (e) {}
-window.location.replace('/?shared-receipt=1#cobros');
+  var targetUrl = '/?shared-receipt=1&receiptId=' + encodeURIComponent(payload.receiptId || '') + '#cobros';
+  try {
+    sessionStorage.setItem('fdv_pending_whatsapp_share', '1');
+    if (payload.receiptId) {
+      sessionStorage.setItem('fdv_shared_receipt_id', payload.receiptId);
+    }
+  } catch (e) {}
+
+  try {
+    if (payload && payload.dataUrl && payload.dataUrl.length < 3500000) {
+      localStorage.setItem('fdv_shared_whatsapp_payload', JSON.stringify(payload));
+    }
+  } catch (e) {}
+
+  try {
+    if (payload && payload.dataUrl && window.indexedDB) {
+      var res = await fetch(payload.dataUrl);
+      var blob = await res.blob();
+      await new Promise(function(resolve) {
+        var req = indexedDB.open('fdv_whatsapp_share_db', 1);
+        req.onupgradeneeded = function() {
+          var db = req.result;
+          if (!db.objectStoreNames.contains('shared_receipts')) {
+            db.createObjectStore('shared_receipts', { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = function() {
+          try {
+            var db = req.result;
+            var tx = db.transaction('shared_receipts', 'readwrite');
+            tx.objectStore('shared_receipts').put({
+              id: 'latest_shared_receipt',
+              blob: blob,
+              name: payload.name || 'soporte_whatsapp.jpg',
+              type: payload.type || blob.type || 'image/jpeg',
+              size: payload.size || blob.size || 0,
+              timestamp: Date.now()
+            });
+            tx.oncomplete = function() { db.close(); resolve(true); };
+            tx.onerror = function() { db.close(); resolve(false); };
+          } catch (err) { resolve(false); }
+        };
+        req.onerror = function() { resolve(false); };
+      });
+    }
+  } catch (e) {}
+
+  window.location.replace(targetUrl);
+})();
 </script>
-Redirigiendo al M\xF3dulo de Cobros...
 </body></html>`);
     } catch (err) {
       console.error("[SHARE TARGET] Error procesando archivo compartido:", err);
