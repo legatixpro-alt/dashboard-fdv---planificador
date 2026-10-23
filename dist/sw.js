@@ -2,6 +2,27 @@ const SHARE_CACHE_NAME = 'fdv-whatsapp-share-v1';
 const SHARED_RECEIPT_KEY = '/__shared_whatsapp_receipt__';
 const SHARED_META_KEY = '/__shared_whatsapp_meta__';
 
+function inferMimeType(fileName, rawType) {
+  const cleanType = String(rawType || '').toLowerCase().trim();
+  const lowerName = String(fileName || '').toLowerCase().trim();
+  if (cleanType === 'application/pdf' || lowerName.endsWith('.pdf')) {
+    return 'application/pdf';
+  }
+  if (cleanType === 'image/png' || lowerName.endsWith('.png')) {
+    return 'image/png';
+  }
+  if (cleanType === 'image/webp' || lowerName.endsWith('.webp')) {
+    return 'image/webp';
+  }
+  if (cleanType === 'image/heic' || lowerName.endsWith('.heic')) {
+    return 'image/heic';
+  }
+  if (cleanType.startsWith('image/')) {
+    return cleanType;
+  }
+  return 'image/jpeg';
+}
+
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
@@ -37,10 +58,15 @@ self.addEventListener('fetch', (event) => {
           const sharedUrl = String(formData.get('url') || '').trim();
 
           if (sharedFile && sharedFile instanceof File && sharedFile.size > 0) {
+            const resolvedMime = inferMimeType(sharedFile.name, sharedFile.type);
+            const defaultExt = resolvedMime === 'application/pdf' ? '.pdf' : '.jpg';
+            const resolvedName = sharedFile.name || `soporte_whatsapp_${Date.now()}${defaultExt}`;
+
             const cache = await caches.open(SHARE_CACHE_NAME);
             const fileHeaders = new Headers({
-              'Content-Type': sharedFile.type || 'image/jpeg',
-              'X-File-Name': encodeURIComponent(sharedFile.name || 'soporte_whatsapp.jpg'),
+              'Content-Type': resolvedMime,
+              'X-File-Name': encodeURIComponent(resolvedName),
+              'X-File-Size': String(sharedFile.size),
               'X-Shared-At': String(Date.now()),
             });
             await cache.put(
@@ -51,8 +77,9 @@ self.addEventListener('fetch', (event) => {
               SHARED_META_KEY,
               new Response(
                 JSON.stringify({
-                  name: sharedFile.name || 'soporte_whatsapp.jpg',
-                  type: sharedFile.type || 'image/jpeg',
+                  name: resolvedName,
+                  type: resolvedMime,
+                  size: sharedFile.size,
                   title,
                   text,
                   url: sharedUrl,

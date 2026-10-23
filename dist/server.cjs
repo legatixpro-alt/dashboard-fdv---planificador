@@ -2242,11 +2242,19 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
 5. "titular": Nombre de la persona o comercio que REALIZ\xD3 el pago (el emisor/ordenante/cliente).
    - NUNCA pongas "Codizulca", "Distribuidora Codizulca" ni los datos de la cuenta receptora de la empresa.
 
-6. "rif": C\xE9dula de Identidad o RIF del pagador/emisor (ej: "V-18293041", "J-30192834-0").`;
+6. "rif": C\xE9dula de Identidad o RIF del pagador/emisor (ej: "V-18293041", "J-30192834-0").
+
+7. "metodo_pago": Clasifica el m\xE9todo de pago en una de estas opciones exactas:
+   - "Pago M\xF3vil"
+   - "Transferencia Bancaria"
+   - "Zelle / Divisas"
+   - "Efectivo Divisas"
+   - "Biopago / Punto"`;
       const cobroSchema = {
         type: import_genai.Type.OBJECT,
         properties: {
           banco: { type: import_genai.Type.STRING },
+          metodo_pago: { type: import_genai.Type.STRING },
           monto: { type: import_genai.Type.NUMBER },
           referencia: { type: import_genai.Type.STRING },
           fecha_pago: { type: import_genai.Type.STRING },
@@ -2311,6 +2319,12 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       else if (/plaza/i.test(bancoClean)) bancoClean = "Banco Plaza";
       else if (/tesoro/i.test(bancoClean)) bancoClean = "Banco del Tesoro";
       else if (/zelle/i.test(bancoClean)) bancoClean = "Zelle";
+      let metodoClean = String(parsed.metodo_pago || "").trim();
+      if (/zelle/i.test(metodoClean) || /zelle/i.test(bancoClean)) metodoClean = "Zelle / Divisas";
+      else if (/transferencia/i.test(metodoClean)) metodoClean = "Transferencia Bancaria";
+      else if (/efectivo/i.test(metodoClean)) metodoClean = "Efectivo Divisas";
+      else if (/biopago|punto/i.test(metodoClean)) metodoClean = "Biopago / Punto";
+      else metodoClean = "Pago M\xF3vil";
       const sinReferencia = !refClean || /^(NO[_ ]?ENCONTRADA|NULL|N\/A)$/i.test(refClean);
       if (montoNum <= 0 && sinReferencia) {
         return res.status(422).json({
@@ -2320,6 +2334,7 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       }
       return res.json({
         banco: bancoClean || "",
+        metodo_pago: metodoClean,
         monto: montoNum,
         referencia: sinReferencia ? "" : refClean,
         fecha_pago: fechaClean,
@@ -2337,6 +2352,165 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         });
       }
       return res.status(500).json({ error: "No se pudo interpretar el comprobante. Puedes ingresar los datos manualmente." });
+    }
+  });
+  const COBROS_BUCKET = "comprobantes-cobros";
+  const COBROS_LOCAL_DB_PATH = import_path.default.join(process.cwd(), "cobros_registrados.json");
+  let cobrosBucketInitialized = false;
+  async function ensureCobrosBucket() {
+    if (cobrosBucketInitialized || !supabase) return;
+    try {
+      const { data: buckets } = await supabase.storage.listBuckets();
+      const exists = Array.isArray(buckets) && buckets.some((b) => b.name === COBROS_BUCKET);
+      if (!exists) {
+        await supabase.storage.createBucket(COBROS_BUCKET, {
+          public: true,
+          fileSizeLimit: 15728640,
+          allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf", "application/json"]
+        });
+      }
+      cobrosBucketInitialized = true;
+    } catch (err) {
+      console.warn("[COBROS STORAGE] Advertencia verificando bucket:", err?.message);
+    }
+  }
+  app2.post("/api/cobros/sync", authenticateToken, async (req, res) => {
+    try {
+      const {
+        id,
+        vendedor,
+        vendedorEmail,
+        ruta,
+        metodo_pago = "Pago M\xF3vil",
+        banco = "No especificado",
+        monto = 0,
+        referencia = "",
+        fecha_pago,
+        titular = "",
+        rif = "",
+        tasa = 0,
+        codigo_cliente = "N/A",
+        nombre_cliente = "",
+        factura = "N/A",
+        fileDataUrl,
+        fileName,
+        fileMimeType,
+        createdAt
+      } = req.body || {};
+      if (!referencia || Number(monto) <= 0) {
+        return res.status(400).json({ error: "Referencia y monto mayor a 0 son obligatorios para sincronizar el cobro." });
+      }
+      const cobroId = String(id || `pago-${Date.now()}`);
+      const safeVendedor = String(vendedor || req.user?.username || "VENDEDOR").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+      const safeRef = String(referencia).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30) || "ref";
+      const fechaStr = String(fecha_pago || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]).replace(/[^0-9-]/g, "");
+      let comprobante_url = "";
+      let uploadedMime = String(fileMimeType || "image/jpeg");
+      if (fileDataUrl && typeof fileDataUrl === "string" && supabase) {
+        await ensureCobrosBucket();
+        let base64Part = fileDataUrl.trim();
+        if (base64Part.startsWith("data:")) {
+          const m = base64Part.match(/^data:([^;]+);base64,(.+)$/);
+          if (m) {
+            uploadedMime = m[1];
+            base64Part = m[2];
+          }
+        }
+        const fileBuffer = Buffer.from(base64Part, "base64");
+        if (fileBuffer.length > 0) {
+          let ext = "jpg";
+          if (uploadedMime === "application/pdf" || String(fileName || "").toLowerCase().endsWith(".pdf")) {
+            ext = "pdf";
+            uploadedMime = "application/pdf";
+          } else if (uploadedMime === "image/png") {
+            ext = "png";
+          } else if (uploadedMime === "image/webp") {
+            ext = "webp";
+          }
+          const storagePath = `soportes/${safeVendedor}/${fechaStr}_${safeRef}_${cobroId}.${ext}`;
+          const { error: uploadErr } = await supabase.storage.from(COBROS_BUCKET).upload(storagePath, fileBuffer, {
+            contentType: uploadedMime,
+            upsert: true
+          });
+          if (!uploadErr) {
+            const { data: pubData } = supabase.storage.from(COBROS_BUCKET).getPublicUrl(storagePath);
+            if (pubData?.publicUrl) {
+              comprobante_url = pubData.publicUrl;
+            }
+          } else {
+            console.warn("[COBROS STORAGE] Error subiendo archivo a Supabase Storage:", uploadErr.message);
+          }
+        }
+      }
+      const syncedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const cobroMetadata = {
+        id: cobroId,
+        vendedor: String(vendedor || req.user?.username || "ADMIN"),
+        vendedorEmail: vendedorEmail || null,
+        ruta: String(ruta || "Ruta 1"),
+        metodo_pago: String(metodo_pago || "Pago M\xF3vil"),
+        banco: String(banco || "No especificado"),
+        monto: Number(monto) || 0,
+        referencia: String(referencia).trim(),
+        fecha_pago: fechaStr,
+        titular: String(titular || ""),
+        rif: String(rif || ""),
+        tasa: Number(tasa) || 0,
+        codigo_cliente: String(codigo_cliente || "N/A"),
+        nombre_cliente: String(nombre_cliente || ""),
+        factura: String(factura || "N/A"),
+        fileName: fileName || null,
+        fileMimeType: uploadedMime,
+        comprobante_url: comprobante_url || null,
+        createdAt: createdAt || syncedAt,
+        syncedAt
+      };
+      if (supabase) {
+        try {
+          await ensureCobrosBucket();
+          const jsonBuffer = Buffer.from(JSON.stringify(cobroMetadata, null, 2), "utf-8");
+          await supabase.storage.from(COBROS_BUCKET).upload(`registros/${safeVendedor}/${cobroId}.json`, jsonBuffer, {
+            contentType: "application/json",
+            upsert: true
+          });
+        } catch (e) {
+          console.warn("[COBROS STORAGE] Advertencia guardando JSON en Storage:", e?.message);
+        }
+      }
+      try {
+        await (0, import_firestore2.setDoc)((0, import_firestore2.doc)(db, "cobros_registrados", cobroId), cobroMetadata, { merge: true });
+      } catch (_fsErr) {
+      }
+      try {
+        let existingList = [];
+        if (import_fs.default.existsSync(COBROS_LOCAL_DB_PATH)) {
+          existingList = JSON.parse(import_fs.default.readFileSync(COBROS_LOCAL_DB_PATH, "utf-8")) || [];
+        }
+        const filtered = existingList.filter((item) => item && item.id !== cobroId);
+        filtered.unshift(cobroMetadata);
+        import_fs.default.writeFileSync(COBROS_LOCAL_DB_PATH, JSON.stringify(filtered.slice(0, 1e3), null, 2), "utf-8");
+      } catch (_localErr) {
+      }
+      return res.json({
+        success: true,
+        comprobante_url,
+        syncedAt,
+        cobro: cobroMetadata
+      });
+    } catch (err) {
+      console.error("[COBROS SYNC] Error sincronizando cobro:", err);
+      return res.status(500).json({ error: err?.message || "Error interno al sincronizar el cobro en la nube." });
+    }
+  });
+  app2.get("/api/cobros", authenticateToken, async (req, res) => {
+    try {
+      let list = [];
+      if (import_fs.default.existsSync(COBROS_LOCAL_DB_PATH)) {
+        list = JSON.parse(import_fs.default.readFileSync(COBROS_LOCAL_DB_PATH, "utf-8")) || [];
+      }
+      return res.json({ success: true, cobros: list });
+    } catch (err) {
+      return res.status(500).json({ error: "Error consultando cobros sincronizados" });
     }
   });
   app2.get("/api/tasa-bcv", async (req, res) => {
@@ -4270,6 +4444,18 @@ REGLAS CR\xCDTICAS DE EXTRACCI\xD3N PARA COMPROBANTES BANCARIOS VENEZOLANOS:
               if (bodyLatin.endsWith("\r\n")) bodyLatin = bodyLatin.slice(0, -2);
               const fileBuf = Buffer.from(bodyLatin, "latin1");
               if (fileBuf.length > 0) {
+                const lowerFn = fileName.toLowerCase();
+                if (lowerFn.endsWith(".pdf") || fileBuf.subarray(0, 4).toString("ascii") === "%PDF") {
+                  mimeType = "application/pdf";
+                } else if (lowerFn.endsWith(".png")) {
+                  mimeType = "image/png";
+                } else if (lowerFn.endsWith(".webp")) {
+                  mimeType = "image/webp";
+                } else if (lowerFn.endsWith(".heic")) {
+                  mimeType = "image/heic";
+                } else if (!mimeType || mimeType === "application/octet-stream") {
+                  mimeType = "image/jpeg";
+                }
                 dataUrl = `data:${mimeType};base64,${fileBuf.toString("base64")}`;
                 break;
               }

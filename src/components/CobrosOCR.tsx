@@ -5,11 +5,20 @@ import {
   Camera, UploadCloud, CheckCircle, AlertTriangle, Search, 
   Loader2, Download, History, Trash2, Calendar, FileText, 
   RefreshCw, DollarSign, Building2, User, Hash, ArrowRight,
-  Share2, ClipboardPaste, Smartphone, X
+  Share2, ClipboardPaste, Smartphone, X, Cloud, CloudOff, Eye, ExternalLink, CreditCard
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getAuthHeaders } from '../services/authService';
+import {
+  validateReceiptFile,
+  saveCobroToLocalDB,
+  getAllCobrosFromLocalDB,
+  deleteCobroFromLocalDB,
+  clearCobrosFromLocalDB,
+  syncCobroToCloud,
+  CobroRecord
+} from '../utils/cobrosOfflineQueue';
 
 // Error Boundary específico para CobrosOCR para evitar que cualquier fallo deje la pantalla en blanco
 interface ErrorBoundaryProps {
@@ -83,7 +92,19 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   // Form State
   const [ruta, setRuta] = useState(() => localStorage.getItem('ocr_ruta') || 'Ruta 1');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewPdfDataUrl, setPreviewPdfDataUrl] = useState<string | null>(null);
+  const [sharedFileMeta, setSharedFileMeta] = useState<{
+    name: string;
+    mimeType: string;
+    size: number;
+    isPdf: boolean;
+  } | null>(null);
+  const [selectedReceiptModal, setSelectedReceiptModal] = useState<any | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine !== false : true
+  );
   const [alertMsg, setAlertMsg] = useState<{ type: 'error' | 'success' | 'info', text: string } | null>(null);
   const [receivedFromWhatsApp, setReceivedFromWhatsApp] = useState(false);
   const [showWhatsAppGuide, setShowWhatsAppGuide] = useState(false);
@@ -103,6 +124,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
 
   // Payment Data
   const [factura, setFactura] = useState('');
+  const [metodoPago, setMetodoPago] = useState<string>('Pago Móvil');
   const [tasa, setTasa] = useState('');
   const [banco, setBanco] = useState('');
   const [montoDisplay, setMontoDisplay] = useState('');
@@ -112,7 +134,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   const [titular, setTitular] = useState('');
   const [rifTitular, setRifTitular] = useState('');
 
-  // Safe localStorage persistence
+  // Safe localStorage persistence + IndexedDB offline queue hydration
   const [pagosConsolidados, setPagosConsolidados] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('ocr_pagos_consolidados');
@@ -125,6 +147,97 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       return [];
     }
   });
+
+  // Hidratar desde IndexedDB al montar (recupera PDFs o imágenes grandes que no caben en localStorage)
+  useEffect(() => {
+    let active = true;
+    getAllCobrosFromLocalDB().then((idbRecords) => {
+      if (!active || !idbRecords || idbRecords.length === 0) return;
+      setPagosConsolidados((prev) => {
+        const byId = new Map<string, any>();
+        for (const item of prev) {
+          if (item && item.id) byId.set(item.id, item);
+        }
+        for (const rec of idbRecords) {
+          if (rec && rec.id) {
+            const existing = byId.get(rec.id) || {};
+            byId.set(rec.id, { ...existing, ...rec });
+          }
+        }
+        return Array.from(byId.values());
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Monitorear estado de red (Online / Offline) y sincronizar cola automáticamente al recuperar señal
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      handleSyncPendingCobros(true);
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [pagosConsolidados]);
+
+  const pendingSyncCount = useMemo(
+    () => pagosConsolidados.filter((p) => p.syncStatus === 'pending' || p.syncStatus === 'error').length,
+    [pagosConsolidados]
+  );
+
+  const handleSyncPendingCobros = async (silent = false) => {
+    const pendingList = pagosConsolidados.filter((p) => p.syncStatus !== 'synced');
+    if (pendingList.length === 0) {
+      if (!silent) {
+        setAlertMsg({ type: 'info', text: 'Todos los cobros de la relación actual ya están sincronizados en la nube.' });
+        setTimeout(() => setAlertMsg(null), 3000);
+      }
+      return;
+    }
+    setIsSyncingCloud(true);
+    let syncedCount = 0;
+    for (const item of pendingList) {
+      const res = await syncCobroToCloud(item as CobroRecord, getAuthHeaders());
+      if (res.success) {
+        syncedCount++;
+        setPagosConsolidados((prev) =>
+          prev.map((p) =>
+            p.id === item.id
+              ? {
+                  ...p,
+                  comprobante_url: res.comprobante_url || p.comprobante_url,
+                  syncStatus: 'synced',
+                  syncedAt: res.syncedAt,
+                }
+              : p
+          )
+        );
+      }
+    }
+    setIsSyncingCloud(false);
+    if (syncedCount > 0) {
+      setAlertMsg({
+        type: 'success',
+        text: `¡${syncedCount} ${syncedCount === 1 ? 'cobro sincronizado' : 'cobros sincronizados'} en Supabase Storage con éxito!`,
+      });
+      setTimeout(() => setAlertMsg(null), 3500);
+    } else if (!silent) {
+      setAlertMsg({
+        type: 'error',
+        text: 'No se pudo conectar con la nube en este momento. Los cobros siguen resguardados localmente.',
+      });
+      setTimeout(() => setAlertMsg(null), 3500);
+    }
+  };
 
   const [historialRelaciones, setHistorialRelaciones] = useState<any[]>(() => {
     try {
@@ -145,13 +258,18 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   // Guardar en localStorage de forma segura (sin exceder cuota de 5MB)
   useEffect(() => {
     try {
-      localStorage.setItem('ocr_pagos_consolidados', JSON.stringify(pagosConsolidados));
+      const safeForLocalStorage = pagosConsolidados.map(p => ({
+        ...p,
+        fileDataUrl: p.fileMimeType === 'application/pdf' ? undefined : p.fileDataUrl
+      }));
+      localStorage.setItem('ocr_pagos_consolidados', JSON.stringify(safeForLocalStorage));
     } catch (e) {
       console.warn("Cuota de localStorage excedida, guardando versión ligera sin imágenes pesadas:", e);
       try {
         const lightweight = pagosConsolidados.map(p => ({
           ...p,
-          image: p.image && p.image.length > 20000 ? undefined : p.image
+          image: p.image && p.image.length > 20000 ? undefined : p.image,
+          fileDataUrl: undefined
         }));
         localStorage.setItem('ocr_pagos_consolidados', JSON.stringify(lightweight));
       } catch (err) {
@@ -170,7 +288,8 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
           ...rel,
           pagos: (rel.pagos || []).map((p: any) => ({
             ...p,
-            image: undefined
+            image: undefined,
+            fileDataUrl: undefined
           }))
         }));
         localStorage.setItem('ocr_historial_relaciones', JSON.stringify(lightweight));
@@ -326,21 +445,51 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     setTimeout(() => setAlertMsg(null), 3000);
   };
 
-  // Procesamiento de imagen con canvas y compresión
+  // Fase 1 y 3: Validación estricta de formato/tamaño, soporte PDF + Imagen y compresión en Canvas
   const handleImageInput = async (file: File) => {
     if (pagosConsolidados.length >= 60) {
       setAlertMsg({ type: 'error', text: 'Has alcanzado el límite de 60 pagos en la relación. Por favor exporta en PDF para archivar.' });
       return;
     }
 
+    const validation = validateReceiptFile(file);
+    if (!validation.valid) {
+      setAlertMsg({ type: 'error', text: validation.error || 'Archivo de soporte no válido.' });
+      return;
+    }
+
     setAlertMsg(null);
     let finalFile = file;
 
+    // Si es un documento PDF compartido desde WhatsApp o seleccionado del dispositivo
+    if (validation.isPdf) {
+      const pdfReader = new FileReader();
+      pdfReader.onload = (e) => {
+        const rawDataUrl = String(e.target?.result || '');
+        const base64Part = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+        const normalizedPdfDataUrl = `data:application/pdf;base64,${base64Part}`;
+        setPreviewImage(null);
+        setPreviewPdfDataUrl(normalizedPdfDataUrl);
+        setSharedFileMeta({
+          name: file.name || `comprobante_${Date.now()}.pdf`,
+          mimeType: 'application/pdf',
+          size: file.size,
+          isPdf: true
+        });
+        processOCR(base64Part, 'application/pdf');
+      };
+      pdfReader.onerror = () => {
+        setAlertMsg({ type: 'error', text: 'No se pudo leer el documento PDF seleccionado.' });
+      };
+      pdfReader.readAsDataURL(file);
+      return;
+    }
+
     // Soporte para formato HEIC de iPhone
-    if (file.name.toLowerCase().endsWith('.heic') || file.type === 'image/heic') {
+    if (validation.isHeic) {
       try {
-        const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.75 });
-        finalFile = new File([converted as Blob], file.name.replace(/\.heic$/i, '.jpg'), { type: 'image/jpeg' });
+        const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.78 });
+        finalFile = new File([converted as Blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
       } catch (err) {
         console.error("Fallo conversión HEIC:", err);
         setAlertMsg({ type: 'error', text: 'Error al convertir formato HEIC de iPhone.' });
@@ -348,7 +497,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       }
     }
 
-    // Comprimir y redimensionar con Canvas a un máximo de 1000px
+    // Comprimir y redimensionar imagen con Canvas a un máximo de 1200px (calidad 0.78)
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
@@ -356,7 +505,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         const canvas = document.createElement('canvas');
         let width = img.width;
         let height = img.height;
-        const MAX_DIM = 1000;
+        const MAX_DIM = 1200;
 
         if (width > MAX_DIM || height > MAX_DIM) {
           if (width > height) {
@@ -373,13 +522,21 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, width, height);
 
-        const resizedBase64 = canvas.toDataURL('image/jpeg', 0.75);
+        const resizedBase64 = canvas.toDataURL('image/jpeg', 0.78);
+        const approxCompressedBytes = Math.round((resizedBase64.length * 3) / 4);
+        setPreviewPdfDataUrl(null);
         setPreviewImage(resizedBase64);
-        processOCR(resizedBase64.split(',')[1]);
+        setSharedFileMeta({
+          name: (finalFile.name || 'soporte_whatsapp.jpg').replace(/\.[^.]+$/, '.jpg'),
+          mimeType: 'image/jpeg',
+          size: approxCompressedBytes,
+          isPdf: false
+        });
+        processOCR(resizedBase64.split(',')[1], 'image/jpeg');
       };
 
       img.onerror = () => {
-        setAlertMsg({ type: 'error', text: 'No se pudo leer la imagen. Intente con JPG o PNG.' });
+        setAlertMsg({ type: 'error', text: 'No se pudo leer la imagen. Intente con JPG, PNG o PDF.' });
       };
 
       img.src = e.target?.result as string;
@@ -392,10 +549,15 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     reader.readAsDataURL(finalFile);
   };
 
-  // OCR con el modelo Gemini del backend
-  const processOCR = async (base64: string) => {
+  // OCR con el modelo Gemini del backend (soporta tanto imágenes como documentos PDF)
+  const processOCR = async (base64: string, mimeType: string = 'image/jpeg') => {
     setIsProcessing(true);
-    setAlertMsg({ type: 'info', text: 'Analizando comprobante con IA...' });
+    setAlertMsg({
+      type: 'info',
+      text: mimeType === 'application/pdf'
+        ? 'Analizando documento PDF de soporte con IA...'
+        : 'Analizando comprobante con IA...'
+    });
     try {
       const res = await fetch('/api/ocr', {
         method: 'POST',
@@ -403,7 +565,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
           'Content-Type': 'application/json',
           ...getAuthHeaders()
         },
-        body: JSON.stringify({ imageBase64: base64 })
+        body: JSON.stringify({ imageBase64: base64, mimeType })
       });
 
       let data: any = {};
@@ -417,6 +579,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
 
       // Asignar los campos extraídos
       if (data.banco && data.banco !== 'null') setBanco(data.banco);
+      if (data.metodo_pago && data.metodo_pago !== 'null') setMetodoPago(data.metodo_pago);
       if (data.referencia && data.referencia !== 'null') setReferencia(String(data.referencia).trim());
       if (data.titular && data.titular !== 'null') {
         const titularStr = String(data.titular).trim();
@@ -486,13 +649,13 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   };
 
-  // Soporte de pegado desde portapapeles (WhatsApp / Capturas) y recepción directa vía Web Share Target
+  // Soporte de pegado desde portapapeles (WhatsApp / Capturas / PDF) y recepción directa vía Web Share Target
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (items) {
         for (let i = 0; i < items.length; i++) {
-          if (items[i].type.startsWith('image/')) {
+          if (items[i].type.startsWith('image/') || items[i].type === 'application/pdf') {
             const blob = items[i].getAsFile();
             if (blob) {
               setReceivedFromWhatsApp(true);
@@ -504,7 +667,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       }
       if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
         const file = e.clipboardData.files[0];
-        if (file.type.startsWith('image/')) {
+        if (file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
           setReceivedFromWhatsApp(true);
           handleImageInput(file);
         }
@@ -522,7 +685,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       setIsStandalonePwa(true);
       setAlertMsg({
         type: 'success',
-        text: '¡App instalada! Ahora en WhatsApp puedes tocar cualquier comprobante -> Compartir -> FDV Cobros.'
+        text: '¡App instalada! Ahora en WhatsApp puedes tocar cualquier comprobante (imagen o PDF) -> Compartir -> FDV Cobros.'
       });
     };
     window.addEventListener('fdv-install-prompt-ready', onPromptReady);
@@ -564,7 +727,11 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
               const fileName =
                 meta?.name ||
                 decodeURIComponent(sharedRes.headers.get('X-File-Name') || 'soporte_whatsapp.jpg');
-              const mimeType = blob.type || meta?.type || 'image/jpeg';
+              const mimeType =
+                meta?.type ||
+                sharedRes.headers.get('Content-Type') ||
+                blob.type ||
+                (fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
               const sharedFile = new File([blob], fileName, { type: mimeType });
 
               setActiveSubTab('nuevo');
@@ -589,11 +756,12 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
           if (parsed && parsed.dataUrl && isMounted) {
             const fetchRes = await fetch(parsed.dataUrl);
             const blob = await fetchRes.blob();
-            const sharedFile = new File(
-              [blob],
-              parsed.name || 'soporte_whatsapp.jpg',
-              { type: parsed.type || blob.type || 'image/jpeg' }
-            );
+            const fileName = parsed.name || 'soporte_whatsapp.jpg';
+            const mimeType =
+              parsed.type ||
+              blob.type ||
+              (fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+            const sharedFile = new File([blob], fileName, { type: mimeType });
             setActiveSubTab('nuevo');
             setReceivedFromWhatsApp(true);
             if (window.location.search.includes('shared-receipt') || window.location.hash === '#cobros') {
@@ -637,10 +805,11 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       }
       const items = await navigator.clipboard.read();
       for (const item of items) {
-        const imageType = item.types.find((t) => t.startsWith('image/'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const file = new File([blob], `whatsapp_cobro_${Date.now()}.png`, { type: imageType });
+        const supportedType = item.types.find((t) => t.startsWith('image/') || t === 'application/pdf');
+        if (supportedType) {
+          const blob = await item.getType(supportedType);
+          const ext = supportedType === 'application/pdf' ? 'pdf' : 'png';
+          const file = new File([blob], `whatsapp_cobro_${Date.now()}.${ext}`, { type: supportedType });
           setReceivedFromWhatsApp(true);
           handleImageInput(file);
           return;
@@ -648,7 +817,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       }
       setAlertMsg({
         type: 'error',
-        text: 'No se encontró ninguna imagen copiada en el portapapeles. En WhatsApp toca el comprobante -> Copiar y vuelve a tocar este botón.'
+        text: 'No se encontró ningún soporte copiado en el portapapeles. En WhatsApp toca el comprobante -> Copiar y vuelve a tocar este botón.'
       });
     } catch (err) {
       setAlertMsg({
@@ -678,7 +847,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   };
 
-  // Consolidar y guardar pago
+  // Fase 3: Consolidar, guardar en Cola Offline (IndexedDB) y subir comprobante a Supabase Storage
   const handleSave = async () => {
     const cleanRef = referencia.trim();
     if (!cleanRef) {
@@ -723,11 +892,15 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       const vendedorEmail = (currentVendedor.toUpperCase().includes('MIKELANGELO') || currentVendedor.toUpperCase().includes('SOTO'))
         ? 'Mikelangelodiaz@gmail.com'
         : undefined;
-      const nuevoPago = {
+      const nowIso = new Date().toISOString();
+      const activeDataUrl = previewPdfDataUrl || previewImage || undefined;
+
+      const nuevoPago: CobroRecord = {
         id: `pago-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         vendedor: currentVendedor,
         vendedorEmail: vendedorEmail,
         ruta: ruta || 'Ruta 1',
+        metodo_pago: metodoPago || 'Pago Móvil',
         banco: banco.trim() || 'No especificado',
         monto: montoNumerico,
         referencia: cleanRef,
@@ -738,35 +911,23 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         codigo_cliente: codigoCliente.trim() || 'N/A',
         nombre_cliente: nombreCliente.trim(),
         factura: factura.trim() || 'N/A',
-        image: previewImage || undefined
+        image: previewImage || undefined,
+        fileDataUrl: activeDataUrl,
+        fileName: sharedFileMeta?.name || (previewPdfDataUrl ? `comprobante_${cleanRef}.pdf` : `comprobante_${cleanRef}.jpg`),
+        fileMimeType: sharedFileMeta?.mimeType || (previewPdfDataUrl ? 'application/pdf' : 'image/jpeg'),
+        fileSize: sharedFileMeta?.size || undefined,
+        syncStatus: 'pending',
+        createdAt: nowIso
       };
 
-      // Registro opcional en Supabase
-      if (hasValidSupabaseConfig) {
-        try {
-          await supabase.from('exports').insert([{
-            vendedor: nuevoPago.vendedor,
-            ruta: nuevoPago.ruta,
-            referencia: nuevoPago.referencia,
-            monto: nuevoPago.monto,
-            fecha_pago: nuevoPago.fecha_pago,
-            tasa: nuevoPago.tasa,
-            codigo_cliente: nuevoPago.codigo_cliente,
-            factura: nuevoPago.factura
-          }]);
-        } catch (supaErr) {
-          console.warn("Registro opcional en Supabase no disponible:", supaErr);
-        }
-      }
-
+      // 1. Guardar inmediatamente en IndexedDB (soporte Offline garantizado) y en estado local
+      await saveCobroToLocalDB(nuevoPago);
       setPagosConsolidados(prev => [nuevoPago, ...prev]);
-      setAlertMsg({ 
-        type: 'success', 
-        text: `¡Pago de ${nuevoPago.nombre_cliente} (Bs. ${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2 }).format(nuevoPago.monto)}) consolidado exitosamente!` 
-      });
 
-      // Limpiar formulario para el siguiente pago de forma segura
+      // Limpiar formulario para el siguiente pago de forma inmediata
       setPreviewImage(null);
+      setPreviewPdfDataUrl(null);
+      setSharedFileMeta(null);
       setReceivedFromWhatsApp(false);
       setReferencia('');
       setMontoDisplay('');
@@ -779,7 +940,33 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
       setRifTitular('');
       setShowSuggestions(false);
 
-      setTimeout(() => setAlertMsg(null), 4000);
+      // 2. Subir comprobante a Supabase Storage y vincular comprobante_url en segundo plano
+      const syncResult = await syncCobroToCloud(nuevoPago, getAuthHeaders());
+      if (syncResult.success) {
+        setPagosConsolidados(prev =>
+          prev.map(p =>
+            p.id === nuevoPago.id
+              ? {
+                  ...p,
+                  comprobante_url: syncResult.comprobante_url,
+                  syncStatus: 'synced',
+                  syncedAt: syncResult.syncedAt
+                }
+              : p
+          )
+        );
+        setAlertMsg({ 
+          type: 'success', 
+          text: `¡Pago de ${nuevoPago.nombre_cliente} (Bs. ${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2 }).format(nuevoPago.monto)}) consolidado y respaldado en la nube!` 
+        });
+      } else {
+        setAlertMsg({ 
+          type: 'info', 
+          text: `Pago de ${nuevoPago.nombre_cliente} guardado en cola local (Offline). Se sincronizará automáticamente al recuperar conexión.` 
+        });
+      }
+
+      setTimeout(() => setAlertMsg(null), 4500);
     } catch (err: any) {
       console.error("Error al consolidar pago:", err);
       setAlertMsg({ type: 'error', text: err.message || 'Error al guardar el pago.' });
@@ -788,9 +975,10 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     }
   };
 
-  // Eliminar un pago individual de la lista actual
+  // Eliminar un pago individual de la lista actual y de IndexedDB
   const handleEliminarPago = (id: string) => {
     setPagosConsolidados(prev => prev.filter(p => p.id !== id));
+    deleteCobroFromLocalDB(id);
     setAlertMsg({ type: 'info', text: 'Pago removido de la relación actual.' });
     setTimeout(() => setAlertMsg(null), 2500);
   };
@@ -1011,6 +1199,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
 
     setHistorialRelaciones(prev => [nuevaRelacion, ...prev]);
     setPagosConsolidados([]);
+    clearCobrosFromLocalDB();
     setAlertMsg({ type: 'success', text: '¡Relación enviada y archivada en el Historial con éxito!' });
     setTimeout(() => setAlertMsg(null), 3500);
   };
@@ -1018,7 +1207,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   return (
     <div className="w-full">
       {/* Pestañas Superiores */}
-      <div className="flex border-b border-neutral-800 mb-6 justify-between items-center">
+      <div className="flex flex-wrap border-b border-neutral-800 mb-6 justify-between items-center gap-2">
         <div className="flex">
           <button 
             onClick={() => setActiveSubTab('nuevo')}
@@ -1044,11 +1233,41 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
           </button>
         </div>
 
-        {/* Info Vendedor Activo */}
-        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-xs font-mono">
-          <User className="w-3.5 h-3.5 text-neutral-400" />
-          <span className="text-neutral-400">Vendedor:</span>
-          <span className="text-white font-bold">{currentVendedor}</span>
+        {/* Estado de Red / Cola Offline + Info Vendedor Activo */}
+        <div className="flex items-center gap-2 pb-2 sm:pb-0">
+          {pendingSyncCount > 0 && (
+            <button
+              type="button"
+              onClick={() => handleSyncPendingCobros(false)}
+              disabled={isSyncingCloud}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-950/60 hover:bg-amber-900/60 border border-amber-700/60 rounded-lg text-xs font-sans font-bold text-amber-300 transition-colors cursor-pointer"
+              title="Subir comprobantes pendientes en la cola local a Supabase Storage"
+            >
+              {isSyncingCloud ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+              )}
+              <span>Sincronizar Pendientes ({pendingSyncCount})</span>
+            </button>
+          )}
+
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono border ${
+              isOnline
+                ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-400'
+                : 'bg-amber-950/40 border-amber-800/60 text-amber-400'
+            }`}
+          >
+            {isOnline ? <Cloud className="w-3.5 h-3.5" /> : <CloudOff className="w-3.5 h-3.5" />}
+            <span>{isOnline ? 'Nube Activa' : 'Modo Offline'}</span>
+          </div>
+
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-xs font-mono">
+            <User className="w-3.5 h-3.5 text-neutral-400" />
+            <span className="text-neutral-400">Vendedor:</span>
+            <span className="text-white font-bold">{currentVendedor}</span>
+          </div>
         </div>
       </div>
 
@@ -1081,23 +1300,25 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
               <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                 <h3 className="text-xs font-sans font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-2">
                   <UploadCloud className="w-4 h-4 text-red-500" />
-                  1. Carga de comprobante (WhatsApp / OCR con IA)
+                  1. Carga de comprobante (WhatsApp / Imagen o PDF)
                 </h3>
                 <div className="flex items-center gap-2">
-                  {receivedFromWhatsApp && previewImage && (
+                  {receivedFromWhatsApp && (previewImage || previewPdfDataUrl) && (
                     <span className="text-[10px] font-sans font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-700/60 px-2 py-0.5 rounded-full">
                       Recibido de WhatsApp
                     </span>
                   )}
-                  {previewImage && (
+                  {(previewImage || previewPdfDataUrl) && (
                     <button 
                       onClick={() => {
                         setPreviewImage(null);
+                        setPreviewPdfDataUrl(null);
+                        setSharedFileMeta(null);
                         setReceivedFromWhatsApp(false);
                       }}
                       className="text-[11px] text-neutral-400 hover:text-white bg-neutral-900 px-2.5 py-1 rounded border border-neutral-800 transition-colors cursor-pointer"
                     >
-                      Cambiar Imagen
+                      Cambiar Soporte
                     </button>
                   )}
                 </div>
@@ -1132,7 +1353,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                   <div className="flex items-start justify-between gap-2">
                     <div className="font-bold text-emerald-400 flex items-center gap-1.5">
                       <Smartphone className="w-4 h-4 shrink-0" />
-                      <span>Cómo enviar el soporte directo desde WhatsApp (sin buscar en la galería):</span>
+                      <span>Cómo enviar el soporte (JPG, PNG o PDF) directo desde WhatsApp:</span>
                     </div>
                     <button
                       type="button"
@@ -1146,7 +1367,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                   <div className="space-y-1.5 text-[11px] text-neutral-300 leading-relaxed">
                     <p>
                       <strong className="text-emerald-300">Opción A · Compartir directo desde WhatsApp a la App:</strong>{' '}
-                      En WhatsApp abre la foto del pago → toca los 3 puntos <strong>⋮</strong> (arriba a la derecha) → toca <strong>Compartir</strong> → selecciona <strong>FDV Cobros</strong>. La app se abrirá directo en este módulo con el soporte cargado automáticamente.
+                      En WhatsApp abre la foto o documento PDF del pago → toca los 3 puntos <strong>⋮</strong> (arriba a la derecha) → toca <strong>Compartir</strong> → selecciona <strong>FDV Cobros</strong>. La app se abrirá directo en este módulo con el soporte cargado y analizado automáticamente.
                     </p>
                     <p>
                       <strong className="text-emerald-300">Opción B · Copiar en WhatsApp y Pegar aquí en 1 toque:</strong>{' '}
@@ -1175,7 +1396,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                 </div>
               )}
 
-              {!previewImage ? (
+              {!previewImage && !previewPdfDataUrl ? (
                 <label
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -1193,15 +1414,15 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                 >
                   <Camera className="w-7 h-7 text-neutral-400 group-hover:text-red-500 transition-colors mb-2" />
                   <span className="text-sm text-neutral-200 font-bold">
-                    Comparte desde WhatsApp, Pega o Toca aquí
+                    Comparte desde WhatsApp (Imagen o PDF), Pega o Toca aquí
                   </span>
-                  <span className="text-xs text-neutral-500 mt-1 max-w-[300px]">
-                    Comparte directo desde WhatsApp a <strong>FDV Cobros</strong>, usa el botón <strong>Pegar Soporte de WhatsApp</strong> o toma foto con la cámara
+                  <span className="text-xs text-neutral-500 mt-1 max-w-[320px]">
+                    Acepta <strong>JPG, PNG, WEBP, HEIC</strong> y documentos <strong>PDF</strong> (máx. 10 MB) compartidos directo desde WhatsApp
                   </span>
                   <input 
                     type="file" 
                     className="hidden" 
-                    accept="image/*,.heic" 
+                    accept="image/*,.heic,.pdf,application/pdf" 
                     onChange={e => {
                       if (e.target.files && e.target.files[0]) {
                         setReceivedFromWhatsApp(false);
@@ -1210,9 +1431,74 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                     }} 
                   />
                 </label>
+              ) : previewPdfDataUrl ? (
+                <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex flex-col justify-between p-3.5 min-h-[185px]">
+                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-neutral-800">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="p-2 rounded-lg bg-red-950/60 border border-red-800/60 text-red-400 shrink-0">
+                        <FileText className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate">
+                          {sharedFileMeta?.name || 'Comprobante_Pago.pdf'}
+                        </p>
+                        <p className="text-[10px] font-mono text-neutral-400">
+                          Documento PDF &bull; {sharedFileMeta?.size ? `${(sharedFileMeta.size / 1024).toFixed(1)} KB` : 'Validado'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedReceiptModal({
+                          nombre_cliente: nombreCliente || 'Vista Previa PDF',
+                          referencia: referencia || 'En edición',
+                          fileMimeType: 'application/pdf',
+                          fileDataUrl: previewPdfDataUrl,
+                          fileName: sharedFileMeta?.name || 'Comprobante.pdf'
+                        })
+                      }
+                      className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Ampliar PDF</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-2 h-32 rounded-lg overflow-hidden border border-neutral-800 bg-neutral-950">
+                    <iframe
+                      src={previewPdfDataUrl}
+                      title="Previsualización de PDF"
+                      className="w-full h-full border-0"
+                    />
+                  </div>
+
+                  {isProcessing && (
+                    <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center z-10 backdrop-blur-xs">
+                      <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-2" />
+                      <span className="text-emerald-400 text-xs font-bold animate-pulse">Extrayendo datos del PDF con Gemini IA...</span>
+                    </div>
+                  )}
+                </div>
               ) : (
-                <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex items-center justify-center h-44">
-                  <img src={previewImage} alt="Comprobante" className="w-full h-full object-contain" />
+                <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex items-center justify-center h-44 group">
+                  <img src={previewImage!} alt="Comprobante" className="w-full h-full object-contain" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedReceiptModal({
+                        nombre_cliente: nombreCliente || 'Vista Previa de Soporte',
+                        referencia: referencia || 'En edición',
+                        fileMimeType: 'image/jpeg',
+                        image: previewImage,
+                        fileName: sharedFileMeta?.name || 'soporte_whatsapp.jpg'
+                      })
+                    }
+                    className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-neutral-950/80 hover:bg-neutral-900 text-white text-[11px] font-bold border border-neutral-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Ampliar</span>
+                  </button>
                   {isProcessing && (
                     <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center z-10 backdrop-blur-xs">
                       <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-2" />
@@ -1242,6 +1528,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                       type="text" 
                       value={codigoCliente} 
                       onChange={e => handleCodigoChange(e.target.value)}
+                      onBlur={handleCodigoBlur}
                       onFocus={() => setShowSuggestions(true)}
                       placeholder="Ej: 1001 o nombre" 
                       className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2.5 pr-8 text-white text-sm focus:border-red-500 focus:outline-none transition-colors" 
@@ -1292,8 +1579,8 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                 </div>
               )}
 
-              {/* Fila Factura y Tasa BCV */}
-              <div className="grid grid-cols-2 gap-3.5">
+              {/* Fila Factura, Método de Pago y Tasa BCV */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
                   <label className="text-[10px] font-sans font-bold text-neutral-400 uppercase tracking-wider mb-1 block">
                     Nro. de Factura *
@@ -1305,6 +1592,23 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                     placeholder="Ej: 001-002" 
                     className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2.5 text-white text-sm focus:border-red-500 focus:outline-none transition-colors" 
                   />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-sans font-bold text-neutral-400 uppercase tracking-wider mb-1 block">
+                    Método de Pago *
+                  </label>
+                  <select
+                    value={metodoPago}
+                    onChange={e => setMetodoPago(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2.5 text-white text-sm focus:border-red-500 focus:outline-none transition-colors"
+                  >
+                    <option value="Pago Móvil">Pago Móvil</option>
+                    <option value="Transferencia Bancaria">Transferencia Bancaria</option>
+                    <option value="Zelle / Divisas">Zelle / Divisas</option>
+                    <option value="Efectivo Divisas">Efectivo Divisas</option>
+                    <option value="Biopago / Punto">Biopago / Punto</option>
+                  </select>
                 </div>
 
                 <div>
@@ -1471,7 +1775,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                   </div>
                   <p className="text-sm font-sans font-bold text-neutral-400 mb-1">No hay cobros en la relación actual</p>
                   <p className="text-xs text-neutral-600 max-w-[240px]">
-                    Sube una foto o completa los datos del formulario a la izquierda y presiona "Consolidar Pago".
+                    Comparte el soporte (imagen o PDF) desde WhatsApp o completa los datos a la izquierda y presiona "Consolidar Pago".
                   </p>
                 </div>
               ) : (
@@ -1479,6 +1783,8 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                   const m = Number(pago.monto) || 0;
                   const t = Number(pago.tasa) || 0;
                   const usd = t > 0 ? (m / t).toFixed(2) : null;
+                  const hasAttachment = Boolean(pago.comprobante_url || pago.image || pago.fileDataUrl);
+                  const isPdfAttachment = pago.fileMimeType === 'application/pdf' || String(pago.comprobante_url || '').endsWith('.pdf');
                   return (
                     <div 
                       key={pago.id} 
@@ -1489,13 +1795,29 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                           <p className="font-bold text-white text-sm leading-snug">
                             {pago.nombre_cliente || 'Cliente sin nombre'}
                           </p>
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <span className="text-[11px] text-neutral-400 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800 font-mono">
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                            <span className="text-[10px] text-neutral-400 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800 font-mono">
                               Fact: {pago.factura || 'N/A'}
                             </span>
-                            <span className="text-[11px] text-neutral-400 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800 font-mono">
+                            <span className="text-[10px] text-neutral-400 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800 font-mono">
                               C.C: {pago.codigo_cliente || 'N/A'}
                             </span>
+                            {pago.metodo_pago && (
+                              <span className="text-[10px] text-sky-300 bg-sky-950/40 px-2 py-0.5 rounded border border-sky-800/60 font-sans font-bold">
+                                {pago.metodo_pago}
+                              </span>
+                            )}
+                            {pago.syncStatus === 'synced' ? (
+                              <span className="text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/60 font-sans font-bold inline-flex items-center gap-1">
+                                <Cloud className="w-3 h-3" />
+                                Sincronizado
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-amber-300 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-800/60 font-sans font-bold inline-flex items-center gap-1">
+                                <CloudOff className="w-3 h-3" />
+                                En Cola Offline
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -1512,13 +1834,24 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                       </div>
 
                       <div className="flex justify-between items-center text-xs text-neutral-400 border-t border-neutral-800/80 pt-2.5 mt-2">
-                        <span className="truncate max-w-[55%] text-neutral-400 text-[11px]">
+                        <span className="truncate max-w-[45%] text-neutral-400 text-[11px]">
                           {pago.banco}
                         </span>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5">
                           <span className="font-mono text-neutral-400 text-[11px]">
                             Ref: {pago.referencia}
                           </span>
+                          {hasAttachment && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedReceiptModal(pago)}
+                              className="text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 border border-emerald-800/60 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Ver comprobante adjunto"
+                            >
+                              <Eye className="w-3 h-3" />
+                              <span>{isPdfAttachment ? 'Ver PDF' : 'Ver Soporte'}</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleEliminarPago(pago.id)}
@@ -1681,6 +2014,72 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal de Previsualización de Soporte (Imagen o PDF) */}
+      {selectedReceiptModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setSelectedReceiptModal(null)}
+        >
+          <div
+            className="bg-neutral-950 border border-neutral-800 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-neutral-800 flex items-center justify-between gap-3 bg-neutral-900/60">
+              <div className="min-w-0">
+                <h4 className="text-sm font-sans font-bold text-white truncate">
+                  {selectedReceiptModal.nombre_cliente || 'Soporte de Pago'}
+                </h4>
+                <p className="text-[11px] font-mono text-neutral-400">
+                  Ref: {selectedReceiptModal.referencia || 'N/A'}
+                  {selectedReceiptModal.metodo_pago ? ` • ${selectedReceiptModal.metodo_pago}` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {selectedReceiptModal.comprobante_url && (
+                  <a
+                    href={selectedReceiptModal.comprobante_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Abrir en Nube</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedReceiptModal(null)}
+                  className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-neutral-950 min-h-[380px]">
+              {selectedReceiptModal.fileMimeType === 'application/pdf' ||
+              String(selectedReceiptModal.comprobante_url || '').endsWith('.pdf') ? (
+                <iframe
+                  src={selectedReceiptModal.fileDataUrl || selectedReceiptModal.comprobante_url}
+                  title="Soporte PDF"
+                  className="w-full h-[65vh] rounded-lg border border-neutral-800 bg-white"
+                />
+              ) : (
+                <img
+                  src={
+                    selectedReceiptModal.image ||
+                    selectedReceiptModal.fileDataUrl ||
+                    selectedReceiptModal.comprobante_url
+                  }
+                  alt="Soporte de pago"
+                  className="max-w-full max-h-[65vh] object-contain rounded-lg"
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

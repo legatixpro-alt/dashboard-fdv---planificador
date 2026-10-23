@@ -40,11 +40,13 @@
             "image/png",
             "image/webp",
             "image/heic",
+            "application/pdf",
             ".jpg",
             ".jpeg",
             ".png",
             ".webp",
-            ".heic"
+            ".heic",
+            ".pdf"
           ]
         }
       ]
