@@ -4636,6 +4636,25 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
     }
   });
 
+  // Almacén temporal en memoria para comprobantes compartidos desde WhatsApp (soporta archivos de hasta 10MB+ sin romper localStorage)
+  const sharedReceiptsMemoryStore = new Map<string, {
+    dataUrl: string;
+    name: string;
+    type: string;
+    size: number;
+    timestamp: number;
+  }>();
+
+  app.get('/api/shared-receipt-temp/:id', (req: any, res: any) => {
+    const id = String(req.params.id || '').trim();
+    const entry = sharedReceiptsMemoryStore.get(id);
+    if (!entry) {
+      return res.status(404).json({ error: 'Comprobante temporal expirado o ya consumido' });
+    }
+    sharedReceiptsMemoryStore.delete(id);
+    return res.json(entry);
+  });
+
   // Fallback Web Share Target endpoint (en caso de que el navegador envíe el POST directo al servidor antes de que el Service Worker lo intercepte)
   app.post('/share-target-cobro', express.raw({ type: '*/*', limit: '25mb' }), (req: any, res: any) => {
     try {
@@ -4646,6 +4665,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
       let dataUrl = '';
       let fileName = 'soporte_whatsapp.jpg';
       let mimeType = 'image/jpeg';
+      let fileSize = 0;
 
       if (boundaryMatch && rawBody.length > 0) {
         const boundary = '--' + (boundaryMatch[1] || boundaryMatch[2]).trim();
@@ -4663,6 +4683,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
               if (bodyLatin.endsWith('\r\n')) bodyLatin = bodyLatin.slice(0, -2);
               const fileBuf = Buffer.from(bodyLatin, 'latin1');
               if (fileBuf.length > 0) {
+                fileSize = fileBuf.length;
                 const lowerFn = fileName.toLowerCase();
                 if (lowerFn.endsWith('.pdf') || fileBuf.subarray(0, 4).toString('ascii') === '%PDF') {
                   mimeType = 'application/pdf';
@@ -4670,7 +4691,7 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
                   mimeType = 'image/png';
                 } else if (lowerFn.endsWith('.webp')) {
                   mimeType = 'image/webp';
-                } else if (lowerFn.endsWith('.heic')) {
+                } else if (lowerFn.endsWith('.heic') || lowerFn.endsWith('.heif')) {
                   mimeType = 'image/heic';
                 } else if (!mimeType || mimeType === 'application/octet-stream') {
                   mimeType = 'image/jpeg';
@@ -4683,26 +4704,90 @@ REGLAS CRÍTICAS DE EXTRACCIÓN PARA COMPROBANTES BANCARIOS VENEZOLANOS:
         }
       }
 
+      const tempReceiptId = `rcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      if (dataUrl) {
+        // Limpiar entradas antiguas (> 10 min)
+        const now = Date.now();
+        for (const [k, v] of sharedReceiptsMemoryStore.entries()) {
+          if (now - v.timestamp > 10 * 60 * 1000) sharedReceiptsMemoryStore.delete(k);
+        }
+        sharedReceiptsMemoryStore.set(tempReceiptId, {
+          dataUrl,
+          name: fileName,
+          type: mimeType,
+          size: fileSize,
+          timestamp: now,
+        });
+      }
+
       const payloadJson = JSON.stringify({
         dataUrl,
         name: fileName,
         type: mimeType,
+        size: fileSize,
+        receiptId: tempReceiptId,
         timestamp: Date.now(),
       });
 
       res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Recibiendo comprobante de WhatsApp...</title></head>
-<body style="background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recibiendo comprobante de WhatsApp...</title></head>
+<body style="background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;gap:12px">
+<div style="width:32px;height:32px;border:3px solid #10b981;border-top-color:transparent;border-radius:50%;animation:s 0.8s linear infinite"></div>
+<style>@keyframes s{to{transform:rotate(360deg)}}</style>
+<div style="font-size:14px;font-weight:bold;color:#10b981">Procesando soporte desde WhatsApp...</div>
 <script>
-try {
+(async function() {
   var payload = ${payloadJson};
-  if (payload && payload.dataUrl) {
-    localStorage.setItem('fdv_shared_whatsapp_payload', JSON.stringify(payload));
-  }
-} catch (e) {}
-window.location.replace('/?shared-receipt=1#cobros');
+  var targetUrl = '/?shared-receipt=1&receiptId=' + encodeURIComponent(payload.receiptId || '') + '#cobros';
+  try {
+    sessionStorage.setItem('fdv_pending_whatsapp_share', '1');
+    if (payload.receiptId) {
+      sessionStorage.setItem('fdv_shared_receipt_id', payload.receiptId);
+    }
+  } catch (e) {}
+
+  try {
+    if (payload && payload.dataUrl && payload.dataUrl.length < 3500000) {
+      localStorage.setItem('fdv_shared_whatsapp_payload', JSON.stringify(payload));
+    }
+  } catch (e) {}
+
+  try {
+    if (payload && payload.dataUrl && window.indexedDB) {
+      var res = await fetch(payload.dataUrl);
+      var blob = await res.blob();
+      await new Promise(function(resolve) {
+        var req = indexedDB.open('fdv_whatsapp_share_db', 1);
+        req.onupgradeneeded = function() {
+          var db = req.result;
+          if (!db.objectStoreNames.contains('shared_receipts')) {
+            db.createObjectStore('shared_receipts', { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = function() {
+          try {
+            var db = req.result;
+            var tx = db.transaction('shared_receipts', 'readwrite');
+            tx.objectStore('shared_receipts').put({
+              id: 'latest_shared_receipt',
+              blob: blob,
+              name: payload.name || 'soporte_whatsapp.jpg',
+              type: payload.type || blob.type || 'image/jpeg',
+              size: payload.size || blob.size || 0,
+              timestamp: Date.now()
+            });
+            tx.oncomplete = function() { db.close(); resolve(true); };
+            tx.onerror = function() { db.close(); resolve(false); };
+          } catch (err) { resolve(false); }
+        };
+        req.onerror = function() { resolve(false); };
+      });
+    }
+  } catch (e) {}
+
+  window.location.replace(targetUrl);
+})();
 </script>
-Redirigiendo al Módulo de Cobros...
 </body></html>`);
     } catch (err) {
       console.error('[SHARE TARGET] Error procesando archivo compartido:', err);

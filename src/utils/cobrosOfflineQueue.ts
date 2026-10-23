@@ -35,10 +35,28 @@ const DB_NAME = 'fdv_cobros_offline_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'cobros_queue';
 
-export const ALLOWED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.heic'];
+const SHARE_DB_NAME = 'fdv_whatsapp_share_db';
+const SHARE_DB_VERSION = 1;
+const SHARE_STORE_NAME = 'shared_receipts';
+const SHARE_RECORD_KEY = 'latest_shared_receipt';
+
+export interface SharedWhatsAppReceipt {
+  id: string;
+  blob: Blob;
+  name: string;
+  type: string;
+  size: number;
+  title?: string;
+  text?: string;
+  url?: string;
+  timestamp: number;
+}
+
+export const ALLOWED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'];
 export const ALLOWED_PDF_EXTENSIONS = ['.pdf'];
-export const MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-export const MAX_IMAGE_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB antes de comprimir
+export const MAX_RECEIPT_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB estricto para imagen o PDF
+export const MAX_PDF_SIZE_BYTES = MAX_RECEIPT_SIZE_BYTES;
+export const MAX_IMAGE_SIZE_BYTES = MAX_RECEIPT_SIZE_BYTES;
 
 export interface FileValidationResult {
   valid: boolean;
@@ -83,29 +101,18 @@ export function validateReceiptFile(file: File): FileValidationResult {
       isPdf: false,
       isHeic: false,
       resolvedMime: rawType,
-      error: 'Formato no permitido. Solo se aceptan imágenes (JPG, PNG, WEBP, HEIC) o documentos PDF.',
+      error: 'Formato inválido. Solo se aceptan imágenes (JPG, PNG, WEBP, HEIC) o documentos PDF.',
     };
   }
 
-  if (isPdf && file.size > MAX_PDF_SIZE_BYTES) {
-    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+  if (file.size > MAX_RECEIPT_SIZE_BYTES) {
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
     return {
       valid: false,
-      isPdf: true,
-      isHeic: false,
-      resolvedMime: 'application/pdf',
-      error: `El documento PDF pesa ${sizeMb} MB y supera el límite máximo de 10 MB.`,
-    };
-  }
-
-  if (isImage && file.size > MAX_IMAGE_SIZE_BYTES) {
-    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-    return {
-      valid: false,
-      isPdf: false,
+      isPdf,
       isHeic,
-      resolvedMime: rawType || 'image/jpeg',
-      error: `La imagen pesa ${sizeMb} MB y supera el límite máximo de 15 MB.`,
+      resolvedMime: isPdf ? 'application/pdf' : rawType || 'image/jpeg',
+      error: `El archivo (${isPdf ? 'PDF' : 'Imagen'}) pesa ${sizeMb} MB y supera el límite máximo permitido de 10 MB.`,
     };
   }
 
@@ -122,6 +129,64 @@ export function validateReceiptFile(file: File): FileValidationResult {
     isHeic,
     resolvedMime,
   };
+}
+
+function openSharedReceiptDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !('indexedDB' in window)) {
+      reject(new Error('IndexedDB no disponible'));
+      return;
+    }
+    const req = window.indexedDB.open(SHARE_DB_NAME, SHARE_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(SHARE_STORE_NAME)) {
+        db.createObjectStore(SHARE_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('Error abriendo SHARE_DB'));
+  });
+}
+
+export async function saveSharedReceiptToIDB(receipt: Omit<SharedWhatsAppReceipt, 'id'>): Promise<void> {
+  try {
+    const db = await openSharedReceiptDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(SHARE_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(SHARE_STORE_NAME);
+      store.put({ ...receipt, id: SHARE_RECORD_KEY });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch (err) {
+    console.warn('[ShareIDB] Error guardando comprobante compartido en IndexedDB:', err);
+  }
+}
+
+export async function consumeSharedReceiptFromIDB(): Promise<SharedWhatsAppReceipt | null> {
+  try {
+    const db = await openSharedReceiptDB();
+    const record = await new Promise<SharedWhatsAppReceipt | null>((resolve, reject) => {
+      const tx = db.transaction(SHARE_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(SHARE_STORE_NAME);
+      const getReq = store.get(SHARE_RECORD_KEY);
+      getReq.onsuccess = () => {
+        const result = getReq.result || null;
+        if (result) {
+          store.delete(SHARE_RECORD_KEY);
+        }
+        resolve(result);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+    db.close();
+    return record;
+  } catch (err) {
+    console.warn('[ShareIDB] Error consumiendo comprobante compartido de IndexedDB:', err);
+    return null;
+  }
 }
 
 function openCobrosDB(): Promise<IDBDatabase> {

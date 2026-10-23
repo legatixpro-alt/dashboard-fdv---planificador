@@ -37,11 +37,22 @@ const isIncomingWhatsAppShare = (): boolean => {
   if (typeof window === 'undefined') return false;
   try {
     const params = new URLSearchParams(window.location.search);
-    return (
+    const hasShareFlag =
       params.get('shared-receipt') === '1' ||
+      params.get('shared-receipt') === 'error' ||
+      Boolean(params.get('receiptId')) ||
       window.location.hash === '#cobros' ||
-      Boolean(localStorage.getItem('fdv_shared_whatsapp_payload'))
-    );
+      Boolean(localStorage.getItem('fdv_shared_whatsapp_payload')) ||
+      sessionStorage.getItem('fdv_pending_whatsapp_share') === '1';
+
+    if (hasShareFlag) {
+      sessionStorage.setItem('fdv_pending_whatsapp_share', '1');
+      const rId = params.get('receiptId');
+      if (rId) {
+        sessionStorage.setItem('fdv_shared_receipt_id', rId);
+      }
+    }
+    return hasShareFlag;
   } catch {
     return false;
   }
@@ -92,16 +103,20 @@ export default function App() {
   });
   const [loginError, setLoginError] = useState('');
 
-  // Escuchar eventos de comprobante compartido desde WhatsApp (Service Worker / hash)
+  // Escuchar eventos de comprobante compartido desde WhatsApp (Service Worker / hash / focus)
   useEffect(() => {
     const onSwMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'WHATSAPP_SHARED_RECEIPT') {
+        try {
+          sessionStorage.setItem('fdv_pending_whatsapp_share', '1');
+        } catch {}
         setPendingWhatsAppShare(true);
         setActiveTab('COBROS_OCR');
       }
     };
     const onHashChange = () => {
-      if (window.location.hash === '#cobros') {
+      if (window.location.hash === '#cobros' || isIncomingWhatsAppShare()) {
+        setPendingWhatsAppShare(true);
         setActiveTab('COBROS_OCR');
       }
     };

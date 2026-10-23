@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, Component, ErrorInfo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component, ErrorInfo } from 'react';
 import { supabase, hasValidSupabaseConfig } from '../lib/supabase';
 import heic2any from 'heic2any';
 import { 
@@ -17,6 +17,7 @@ import {
   deleteCobroFromLocalDB,
   clearCobrosFromLocalDB,
   syncCobroToCloud,
+  consumeSharedReceiptFromIDB,
   CobroRecord
 } from '../utils/cobrosOfflineQueue';
 
@@ -101,13 +102,56 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   } | null>(null);
   const [selectedReceiptModal, setSelectedReceiptModal] = useState<any | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState<string>('Procesando soporte...');
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine !== false : true
   );
-  const [alertMsg, setAlertMsg] = useState<{ type: 'error' | 'success' | 'info', text: string } | null>(null);
+  const [alertMsg, setAlertMsg] = useState<{ type: 'error' | 'success' | 'info', text: string, actionLabel?: string, onAction?: () => void } | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ type: 'error' | 'success' | 'info', text: string, actionLabel?: string, onAction?: () => void } | null>(null);
   const [receivedFromWhatsApp, setReceivedFromWhatsApp] = useState(false);
   const [showWhatsAppGuide, setShowWhatsAppGuide] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const toastTimerRef = useRef<any>(null);
+
+  const notifyUser = (
+    type: 'error' | 'success' | 'info',
+    text: string,
+    durationMs: number = 4500,
+    action?: { label: string; onClick: () => void }
+  ) => {
+    const payload = {
+      type,
+      text,
+      actionLabel: action?.label,
+      onAction: action?.onClick,
+    };
+    setAlertMsg(payload);
+    setToastMsg(payload);
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    if (durationMs > 0) {
+      toastTimerRef.current = setTimeout(() => {
+        setToastMsg(null);
+      }, durationMs);
+    }
+  };
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return 'Validado';
+    if (bytes >= 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  };
+
+  const triggerNativeFilePicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
   const [canInstallPwa, setCanInstallPwa] = useState<boolean>(() =>
     typeof window !== 'undefined' && Boolean((window as any).__fdvDeferredInstallPrompt)
   );
@@ -445,24 +489,40 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     setTimeout(() => setAlertMsg(null), 3000);
   };
 
-  // Fase 1 y 3: Validación estricta de formato/tamaño, soporte PDF + Imagen y compresión en Canvas
-  const handleImageInput = async (file: File) => {
+  // Fase 1 y 3: Validación estricta de formato/tamaño (máx. 10 MB), soporte PDF + Imagen, vista previa inmediata y retroalimentación Toast
+  const handleImageInput = async (file: File, fromWhatsApp = false) => {
     if (pagosConsolidados.length >= 60) {
-      setAlertMsg({ type: 'error', text: 'Has alcanzado el límite de 60 pagos en la relación. Por favor exporta en PDF para archivar.' });
+      notifyUser('error', 'Has alcanzado el límite de 60 pagos en la relación. Por favor exporta en PDF para archivar.', 6000);
       return;
     }
 
     const validation = validateReceiptFile(file);
     if (!validation.valid) {
-      setAlertMsg({ type: 'error', text: validation.error || 'Archivo de soporte no válido.' });
+      notifyUser('error', validation.error || 'Archivo de soporte no válido. Usa JPG, PNG, WEBP, HEIC o PDF (máx. 10 MB).', 7000);
       return;
     }
 
-    setAlertMsg(null);
+    if (fromWhatsApp) {
+      setReceivedFromWhatsApp(true);
+    }
+
+    setIsProcessing(true);
+    setProcessingLabel('Procesando soporte...');
+    notifyUser('info', `Procesando soporte "${file.name || 'comprobante'}" (${formatFileSize(file.size)})...`, 4000);
+
     let finalFile = file;
 
     // Si es un documento PDF compartido desde WhatsApp o seleccionado del dispositivo
     if (validation.isPdf) {
+      const resolvedPdfName = file.name || `comprobante_${Date.now()}.pdf`;
+      // Mostrar la tarjeta de PDF de inmediato mientras FileReader convierte a Base64
+      setSharedFileMeta({
+        name: resolvedPdfName,
+        mimeType: 'application/pdf',
+        size: file.size,
+        isPdf: true
+      });
+
       const pdfReader = new FileReader();
       pdfReader.onload = (e) => {
         const rawDataUrl = String(e.target?.result || '');
@@ -471,15 +531,21 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         setPreviewImage(null);
         setPreviewPdfDataUrl(normalizedPdfDataUrl);
         setSharedFileMeta({
-          name: file.name || `comprobante_${Date.now()}.pdf`,
+          name: resolvedPdfName,
           mimeType: 'application/pdf',
           size: file.size,
           isPdf: true
         });
+        notifyUser(
+          'success',
+          `PDF cargado: ${resolvedPdfName} (${formatFileSize(file.size)}). Extrayendo datos...`,
+          4500
+        );
         processOCR(base64Part, 'application/pdf');
       };
       pdfReader.onerror = () => {
-        setAlertMsg({ type: 'error', text: 'No se pudo leer el documento PDF seleccionado.' });
+        setIsProcessing(false);
+        notifyUser('error', 'No se pudo leer el documento PDF seleccionado.', 6000);
       };
       pdfReader.readAsDataURL(file);
       return;
@@ -488,62 +554,113 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     // Soporte para formato HEIC de iPhone
     if (validation.isHeic) {
       try {
-        const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.78 });
-        finalFile = new File([converted as Blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+        setProcessingLabel('Convirtiendo soporte HEIC...');
+        const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.8 });
+        const blobResult = Array.isArray(converted) ? converted[0] : converted;
+        finalFile = new File([blobResult as Blob], (file.name || 'soporte.heic').replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
       } catch (err) {
         console.error("Fallo conversión HEIC:", err);
-        setAlertMsg({ type: 'error', text: 'Error al convertir formato HEIC de iPhone.' });
+        setIsProcessing(false);
+        notifyUser('error', 'Error al convertir formato HEIC de iPhone. Intenta compartir como JPG, PNG o PDF.', 6000);
         return;
       }
     }
 
-    // Comprimir y redimensionar imagen con Canvas a un máximo de 1200px (calidad 0.78)
+    // Comprimir y redimensionar imagen con Canvas a un máximo de 1200px (calidad 0.80) con fallback directo si Canvas/Image falla en Android WebView
     const reader = new FileReader();
     reader.onload = (e) => {
+      const rawDataUrl = String(e.target?.result || '');
+      if (!rawDataUrl) {
+        setIsProcessing(false);
+        notifyUser('error', 'El archivo de imagen está vacío o no pudo leerse.', 6000);
+        return;
+      }
+
+      const resolvedName = (finalFile.name || 'soporte_whatsapp.jpg').replace(/\.[^.]+$/, '.jpg');
+
+      // Mostrar previsualización inmediata con el DataURL original para que la pantalla NUNCA se quede estática
+      setPreviewPdfDataUrl(null);
+      setPreviewImage(rawDataUrl);
+      setSharedFileMeta({
+        name: resolvedName,
+        mimeType: validation.resolvedMime || 'image/jpeg',
+        size: finalFile.size,
+        isPdf: false
+      });
+
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        const MAX_DIM = 1200;
+        try {
+          const canvas = document.createElement('canvas');
+          let width = img.width || 800;
+          let height = img.height || 800;
+          const MAX_DIM = 1200;
 
-        if (width > MAX_DIM || height > MAX_DIM) {
-          if (width > height) {
-            height = Math.round((height * MAX_DIM) / width);
-            width = MAX_DIM;
-          } else {
-            width = Math.round((width * MAX_DIM) / height);
-            height = MAX_DIM;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width > height) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            } else {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
           }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+
+          const resizedBase64 = canvas.toDataURL('image/jpeg', 0.8);
+          const approxCompressedBytes = Math.round((resizedBase64.length * 3) / 4);
+          setPreviewPdfDataUrl(null);
+          setPreviewImage(resizedBase64);
+          setSharedFileMeta({
+            name: resolvedName,
+            mimeType: 'image/jpeg',
+            size: finalFile.size || approxCompressedBytes,
+            isPdf: false
+          });
+          notifyUser(
+            'success',
+            `Soporte cargado: ${resolvedName} (${formatFileSize(finalFile.size || approxCompressedBytes)}). Analizando...`,
+            4500
+          );
+          processOCR(resizedBase64.split(',')[1], 'image/jpeg');
+        } catch (canvasErr) {
+          console.warn('Fallback a imagen sin comprimir tras error en Canvas:', canvasErr);
+          const fallbackBase64 = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+          notifyUser(
+            'success',
+            `Soporte cargado: ${resolvedName} (${formatFileSize(finalFile.size)}). Analizando...`,
+            4500
+          );
+          processOCR(fallbackBase64, validation.resolvedMime || 'image/jpeg');
         }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-
-        const resizedBase64 = canvas.toDataURL('image/jpeg', 0.78);
-        const approxCompressedBytes = Math.round((resizedBase64.length * 3) / 4);
-        setPreviewPdfDataUrl(null);
-        setPreviewImage(resizedBase64);
-        setSharedFileMeta({
-          name: (finalFile.name || 'soporte_whatsapp.jpg').replace(/\.[^.]+$/, '.jpg'),
-          mimeType: 'image/jpeg',
-          size: approxCompressedBytes,
-          isPdf: false
-        });
-        processOCR(resizedBase64.split(',')[1], 'image/jpeg');
       };
 
       img.onerror = () => {
-        setAlertMsg({ type: 'error', text: 'No se pudo leer la imagen. Intente con JPG, PNG o PDF.' });
+        // Si la decodificación en <img> falla en algún contenedor Android, usar el DataURL leído y enviar a OCR
+        const fallbackBase64 = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+        if (fallbackBase64) {
+          notifyUser(
+            'success',
+            `Soporte cargado: ${resolvedName} (${formatFileSize(finalFile.size)}). Analizando...`,
+            4500
+          );
+          processOCR(fallbackBase64, validation.resolvedMime || 'image/jpeg');
+        } else {
+          setIsProcessing(false);
+          notifyUser('error', 'No se pudo decodificar la imagen. Intente con JPG, PNG o PDF.', 6000);
+        }
       };
 
-      img.src = e.target?.result as string;
+      img.src = rawDataUrl;
     };
 
     reader.onerror = () => {
-      setAlertMsg({ type: 'error', text: 'Error al abrir el archivo de comprobante.' });
+      setIsProcessing(false);
+      notifyUser('error', 'Error al abrir el archivo de comprobante.', 6000);
     };
 
     reader.readAsDataURL(finalFile);
@@ -552,12 +669,11 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
   // OCR con el modelo Gemini del backend (soporta tanto imágenes como documentos PDF)
   const processOCR = async (base64: string, mimeType: string = 'image/jpeg') => {
     setIsProcessing(true);
-    setAlertMsg({
-      type: 'info',
-      text: mimeType === 'application/pdf'
-        ? 'Analizando documento PDF de soporte con IA...'
+    setProcessingLabel(
+      mimeType === 'application/pdf'
+        ? 'Analizando PDF con IA...'
         : 'Analizando comprobante con IA...'
-    });
+    );
     try {
       const res = await fetch('/api/ocr', {
         method: 'POST',
@@ -632,18 +748,18 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         }
       }
 
-      setAlertMsg({ type: 'success', text: '¡Datos extraídos con éxito! Valida o ajusta cualquier detalle.' });
-      setTimeout(() => setAlertMsg(null), 4000);
+      notifyUser('success', '¡Soporte cargado y datos extraídos con éxito! Valida o ajusta cualquier detalle.', 5000);
     } catch (err: any) {
       console.error("Error en processOCR:", err);
       const raw = String(err?.message || '');
-      const looksRaw = raw.trim().startsWith('{') || /RESOURCE_EXHAUSTED|prepayment|billing/i.test(raw);
-      setAlertMsg({
-        type: 'error',
-        text: looksRaw || !raw
-          ? 'El lector automático (IA) no está disponible por ahora. Ingresa los datos del pago manualmente.'
-          : raw
-      });
+      const looksRaw = raw.trim().startsWith('{') || /RESOURCE_EXHAUSTED|prepayment|billing|API Key/i.test(raw);
+      notifyUser(
+        'info',
+        looksRaw || !raw
+          ? 'Soporte cargado en vista previa. Completa los datos del pago manualmente abajo.'
+          : `Soporte cargado. (${raw})`,
+        6000
+      );
     } finally {
       setIsProcessing(false);
     }
@@ -659,7 +775,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
             const blob = items[i].getAsFile();
             if (blob) {
               setReceivedFromWhatsApp(true);
-              handleImageInput(blob);
+              handleImageInput(blob, true);
               return;
             }
           }
@@ -669,7 +785,7 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         const file = e.clipboardData.files[0];
         if (file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
           setReceivedFromWhatsApp(true);
-          handleImageInput(file);
+          handleImageInput(file, true);
         }
       }
     };
@@ -683,10 +799,11 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     const onInstalled = () => {
       setCanInstallPwa(false);
       setIsStandalonePwa(true);
-      setAlertMsg({
-        type: 'success',
-        text: '¡App instalada! Ahora en WhatsApp puedes tocar cualquier comprobante (imagen o PDF) -> Compartir -> FDV Cobros.'
-      });
+      notifyUser(
+        'success',
+        '¡App instalada! Ahora en WhatsApp puedes tocar cualquier comprobante (imagen o PDF) -> Compartir -> FDV Cobros.',
+        6000
+      );
     };
     window.addEventListener('fdv-install-prompt-ready', onPromptReady);
     window.addEventListener('fdv-app-installed', onInstalled);
@@ -696,23 +813,73 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
     };
   }, []);
 
-  // Consumir comprobante compartido directamente desde el menú "Compartir" de WhatsApp (Cache Storage o Fallback localStorage)
+  // Consumir comprobante compartido directamente desde el menú "Compartir" de WhatsApp (IndexedDB, Cache Storage, Server Temp Store o Fallback localStorage)
   useEffect(() => {
     let isMounted = true;
+    let isConsuming = false;
 
     const applySharedCaptionMeta = (captionText: string) => {
       const clean = String(captionText || '').trim();
       if (!clean) return;
-      // Si el texto compartido desde WhatsApp incluye un código de cliente o factura, intentar vincularlo
       const facMatch = clean.match(/(?:fac(?:tura)?|nro|nota)\s*[:#-]?\s*([A-Za-z0-9-]{3,15})/i);
       if (facMatch && facMatch[1] && !factura) {
         setFactura(facMatch[1]);
       }
     };
 
-    const consumeSharedReceipt = async () => {
+    const cleanupShareUrlFlags = () => {
       try {
-        // 1. Revisar Cache Storage escrito por el Service Worker (Web Share Target API)
+        sessionStorage.removeItem('fdv_pending_whatsapp_share');
+        sessionStorage.removeItem('fdv_shared_receipt_id');
+        if (window.location.search.includes('shared-receipt') || window.location.search.includes('receiptId') || window.location.hash === '#cobros') {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      } catch {}
+    };
+
+    const consumeSharedReceipt = async () => {
+      if (isConsuming || !isMounted) return;
+      isConsuming = true;
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('shared-receipt') === 'error') {
+          cleanupShareUrlFlags();
+          notifyUser(
+            'error',
+            'No se pudo recibir el archivo automático desde WhatsApp. Por favor selecciónalo tocando aquí.',
+            7000,
+            { label: 'Elegir Archivo', onClick: triggerNativeFilePicker }
+          );
+          return;
+        }
+
+        // 1. Revisar IndexedDB (escrito por el Service Worker o por el script puente del servidor, soporta archivos grandes > 5MB)
+        const idbRecord = await consumeSharedReceiptFromIDB();
+        if (idbRecord && idbRecord.blob && idbRecord.blob.size > 0 && isMounted) {
+          // Limpiar también CacheStorage para no procesarlo dos veces
+          if ('caches' in window) {
+            caches.open('fdv-whatsapp-share-v1').then((c) => {
+              c.delete('/__shared_whatsapp_receipt__');
+              c.delete('/__shared_whatsapp_meta__');
+            }).catch(() => {});
+          }
+          localStorage.removeItem('fdv_shared_whatsapp_payload');
+
+          const fileName = idbRecord.name || (idbRecord.type === 'application/pdf' ? 'soporte_whatsapp.pdf' : 'soporte_whatsapp.jpg');
+          const mimeType = idbRecord.type || idbRecord.blob.type || (fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+          const sharedFile = new File([idbRecord.blob], fileName, { type: mimeType });
+
+          setActiveSubTab('nuevo');
+          setReceivedFromWhatsApp(true);
+          if (idbRecord.text || idbRecord.title) {
+            applySharedCaptionMeta(`${idbRecord.title || ''} ${idbRecord.text || ''}`);
+          }
+          cleanupShareUrlFlags();
+          handleImageInput(sharedFile, true);
+          return;
+        }
+
+        // 2. Revisar Cache Storage escrito por el Service Worker (Web Share Target API)
         if ('caches' in window) {
           const cache = await caches.open('fdv-whatsapp-share-v1');
           const sharedRes = await cache.match('/__shared_whatsapp_receipt__');
@@ -739,16 +906,43 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
               if (meta?.text || meta?.title) {
                 applySharedCaptionMeta(`${meta.title || ''} ${meta.text || ''}`);
               }
-              if (window.location.search.includes('shared-receipt') || window.location.hash === '#cobros') {
-                window.history.replaceState({}, document.title, window.location.pathname);
-              }
-              handleImageInput(sharedFile);
+              cleanupShareUrlFlags();
+              handleImageInput(sharedFile, true);
               return;
             }
           }
         }
 
-        // 2. Revisar Fallback en localStorage escrito por POST /share-target-cobro del servidor
+        // 3. Revisar token efímero del servidor (/api/shared-receipt-temp/:id) cuando el archivo era grande o entró vía POST al backend
+        const receiptId = params.get('receiptId') || sessionStorage.getItem('fdv_shared_receipt_id');
+        if (receiptId) {
+          try {
+            const tempRes = await fetch(`/api/shared-receipt-temp/${encodeURIComponent(receiptId)}`);
+            if (tempRes.ok) {
+              const parsed = await tempRes.json();
+              if (parsed && parsed.dataUrl && isMounted) {
+                const fetchRes = await fetch(parsed.dataUrl);
+                const blob = await fetchRes.blob();
+                const fileName = parsed.name || 'soporte_whatsapp.jpg';
+                const mimeType =
+                  parsed.type ||
+                  blob.type ||
+                  (fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+                const sharedFile = new File([blob], fileName, { type: mimeType });
+                localStorage.removeItem('fdv_shared_whatsapp_payload');
+                setActiveSubTab('nuevo');
+                setReceivedFromWhatsApp(true);
+                cleanupShareUrlFlags();
+                handleImageInput(sharedFile, true);
+                return;
+              }
+            }
+          } catch (tempErr) {
+            console.warn('Error consultando comprobante temporal del servidor:', tempErr);
+          }
+        }
+
+        // 4. Revisar Fallback en localStorage escrito por POST /share-target-cobro del servidor
         const rawPayload = localStorage.getItem('fdv_shared_whatsapp_payload');
         if (rawPayload) {
           localStorage.removeItem('fdv_shared_whatsapp_payload');
@@ -764,14 +958,15 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
             const sharedFile = new File([blob], fileName, { type: mimeType });
             setActiveSubTab('nuevo');
             setReceivedFromWhatsApp(true);
-            if (window.location.search.includes('shared-receipt') || window.location.hash === '#cobros') {
-              window.history.replaceState({}, document.title, window.location.pathname);
-            }
-            handleImageInput(sharedFile);
+            cleanupShareUrlFlags();
+            handleImageInput(sharedFile, true);
+            return;
           }
         }
       } catch (err) {
         console.warn('Error leyendo comprobante compartido desde WhatsApp:', err);
+      } finally {
+        isConsuming = false;
       }
     };
 
@@ -782,49 +977,103 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         consumeSharedReceipt();
       }
     };
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        consumeSharedReceipt();
+      }
+    };
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', onSwMessage);
     }
+    window.addEventListener('focus', onVisibilityOrFocus);
+    document.addEventListener('visibilitychange', onVisibilityOrFocus);
+
     return () => {
       isMounted = false;
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.removeEventListener('message', onSwMessage);
       }
+      window.removeEventListener('focus', onVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', onVisibilityOrFocus);
     };
   }, []);
 
-  // Botón de 1 toque: Pegar imagen copiada desde WhatsApp sin abrir galería
+  // Vía B: Botón "Pegar Soporte de WhatsApp" con manejo de permisos, blobs de imagen/PDF y mensajes claros en Android
   const handlePasteFromWhatsAppButton = async () => {
+    setIsProcessing(true);
+    setProcessingLabel('Leyendo portapapeles...');
     try {
-      if (!navigator.clipboard || !navigator.clipboard.read) {
-        setAlertMsg({
-          type: 'info',
-          text: 'En WhatsApp copia la imagen del pago y luego mantén presionado aquí o usa Ctrl+V para pegarla.'
-        });
-        return;
-      }
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const supportedType = item.types.find((t) => t.startsWith('image/') || t === 'application/pdf');
-        if (supportedType) {
-          const blob = await item.getType(supportedType);
-          const ext = supportedType === 'application/pdf' ? 'pdf' : 'png';
-          const file = new File([blob], `whatsapp_cobro_${Date.now()}.${ext}`, { type: supportedType });
-          setReceivedFromWhatsApp(true);
-          handleImageInput(file);
-          return;
+      // Verificar estado de permiso en navegadores compatibles (Chromium / Android)
+      if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+        try {
+          const permStatus = await navigator.permissions.query({ name: 'clipboard-read' as PermissionName });
+          if (permStatus.state === 'denied') {
+            setIsProcessing(false);
+            notifyUser(
+              'error',
+              'El permiso del portapapeles está bloqueado en tu navegador. Usa el botón para elegir el archivo de WhatsApp.',
+              7000,
+              { label: 'Elegir Archivo', onClick: triggerNativeFilePicker }
+            );
+            return;
+          }
+        } catch {
+          // Algunos navegadores móviles no soportan query para 'clipboard-read', continuar con read()
         }
       }
-      setAlertMsg({
-        type: 'error',
-        text: 'No se encontró ningún soporte copiado en el portapapeles. En WhatsApp toca el comprobante -> Copiar y vuelve a tocar este botón.'
-      });
-    } catch (err) {
-      setAlertMsg({
-        type: 'info',
-        text: 'Permite el acceso al portapapeles cuando el navegador lo solicite, o usa la opción "Compartir desde WhatsApp".'
-      });
+
+      if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+        setIsProcessing(false);
+        notifyUser(
+          'info',
+          'Tu navegador en este dispositivo no permite leer imágenes del portapapeles directamente. Selecciona la imagen o PDF de WhatsApp aquí.',
+          7000,
+          { label: 'Abrir Archivos de WhatsApp', onClick: triggerNativeFilePicker }
+        );
+        return;
+      }
+
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const supportedType = item.types.find(
+          (t) => t.startsWith('image/') || t === 'application/pdf'
+        );
+        if (supportedType) {
+          const blob = await item.getType(supportedType);
+          if (blob && blob.size > 0) {
+            const ext = supportedType === 'application/pdf' ? 'pdf' : supportedType.includes('jpeg') ? 'jpg' : 'png';
+            const file = new File([blob], `whatsapp_cobro_${Date.now()}.${ext}`, { type: supportedType });
+            setReceivedFromWhatsApp(true);
+            await handleImageInput(file, true);
+            return;
+          }
+        }
+      }
+
+      setIsProcessing(false);
+      notifyUser(
+        'error',
+        'El portapapeles de Android no contiene una imagen o PDF válido. En WhatsApp toca la foto -> Copiar, o toca "Elegir Archivo" para cargarlo de Recientes.',
+        7500,
+        { label: 'Elegir Archivo', onClick: triggerNativeFilePicker }
+      );
+    } catch (err: any) {
+      setIsProcessing(false);
+      console.warn('Aviso al leer portapapeles:', err);
+      notifyUser(
+        'info',
+        'No se pudo leer una imagen del portapapeles (permiso denegado o sin imagen copiada). Toca "Elegir Archivo" para seleccionar el soporte de WhatsApp.',
+        7500,
+        { label: 'Elegir Archivo', onClick: triggerNativeFilePicker }
+      );
     }
+  };
+
+  // Vía C: Botón "Compartir desde WhatsApp" -> abre directamente el selector nativo de archivos (Recientes / WhatsApp) y despliega la guía rápida
+  const handleShareFromWhatsAppButton = () => {
+    setShowWhatsAppGuide(true);
+    triggerNativeFilePicker();
   };
 
   // Activar la app en el menú nativo "Compartir" de WhatsApp (Web Share Target PWA)
@@ -1271,23 +1520,95 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
         </div>
       </div>
 
+      {/* Notificación Toast Flotante (Visible en cualquier posición de scroll móvil/desktop) */}
+      {toastMsg && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-md z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <div className={`p-3.5 rounded-xl flex items-center justify-between gap-3 font-bold text-xs shadow-2xl border backdrop-blur-md ${
+            toastMsg.type === 'error'
+              ? 'bg-red-950/95 border-red-700 text-red-200'
+              : toastMsg.type === 'success'
+              ? 'bg-emerald-950/95 border-emerald-700 text-emerald-200'
+              : 'bg-neutral-900/95 border-neutral-700 text-neutral-100'
+          }`}>
+            <div className="flex items-center gap-2.5 min-w-0">
+              {toastMsg.type === 'error' ? (
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+              ) : toastMsg.type === 'success' ? (
+                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+              ) : (
+                <Loader2 className={`w-4 h-4 shrink-0 text-emerald-400 ${isProcessing ? 'animate-spin' : ''}`} />
+              )}
+              <span className="leading-snug">{toastMsg.text}</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {toastMsg.actionLabel && toastMsg.onAction && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fn = toastMsg.onAction;
+                    setToastMsg(null);
+                    fn?.();
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer transition-colors"
+                >
+                  {toastMsg.actionLabel}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setToastMsg(null)}
+                className="p-1 text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Alerta Global */}
       {alertMsg && (
-        <div className={`p-3.5 rounded-xl flex items-center gap-2.5 font-bold text-xs mb-6 shadow-md transition-all ${
+        <div className={`p-3.5 rounded-xl flex items-center justify-between gap-2.5 font-bold text-xs mb-6 shadow-md transition-all ${
           alertMsg.type === 'error' 
             ? 'bg-red-950/60 border border-red-900 text-red-400' 
             : alertMsg.type === 'success'
             ? 'bg-emerald-950/60 border border-emerald-900 text-emerald-400'
             : 'bg-neutral-900 border border-neutral-700 text-neutral-200'
         }`}>
-          {alertMsg.type === 'error' ? (
-            <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
-          ) : (
-            <CheckCircle className="w-4 h-4 shrink-0 text-emerald-500" />
+          <div className="flex items-center gap-2.5">
+            {alertMsg.type === 'error' ? (
+              <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
+            ) : (
+              <CheckCircle className="w-4 h-4 shrink-0 text-emerald-500" />
+            )}
+            <span>{alertMsg.text}</span>
+          </div>
+          {alertMsg.actionLabel && alertMsg.onAction && (
+            <button
+              type="button"
+              onClick={alertMsg.onAction}
+              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shrink-0 cursor-pointer transition-colors"
+            >
+              {alertMsg.actionLabel}
+            </button>
           )}
-          <span>{alertMsg.text}</span>
         </div>
       )}
+
+      {/* Input de archivo oculto global para la sección de comprobantes */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept="image/jpeg,image/png,image/webp,image/heic,application/pdf,.jpg,.jpeg,.png,.webp,.heic,.pdf"
+        onChange={e => {
+          const selected = e.target.files && e.target.files[0];
+          if (selected) {
+            handleImageInput(selected, false);
+          }
+          e.target.value = '';
+        }}
+      />
 
       {activeSubTab === 'nuevo' ? (
         <div className="grid lg:grid-cols-[1.1fr_1.4fr] gap-6">
@@ -1303,23 +1624,36 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                   1. Carga de comprobante (WhatsApp / Imagen o PDF)
                 </h3>
                 <div className="flex items-center gap-2">
-                  {receivedFromWhatsApp && (previewImage || previewPdfDataUrl) && (
+                  {receivedFromWhatsApp && (previewImage || previewPdfDataUrl || sharedFileMeta) && (
                     <span className="text-[10px] font-sans font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-700/60 px-2 py-0.5 rounded-full">
                       Recibido de WhatsApp
                     </span>
                   )}
-                  {(previewImage || previewPdfDataUrl) && (
-                    <button 
-                      onClick={() => {
-                        setPreviewImage(null);
-                        setPreviewPdfDataUrl(null);
-                        setSharedFileMeta(null);
-                        setReceivedFromWhatsApp(false);
-                      }}
-                      className="text-[11px] text-neutral-400 hover:text-white bg-neutral-900 px-2.5 py-1 rounded border border-neutral-800 transition-colors cursor-pointer"
-                    >
-                      Cambiar Soporte
-                    </button>
+                  {(previewImage || previewPdfDataUrl || sharedFileMeta) && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={triggerNativeFilePicker}
+                        className="text-[11px] text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 px-2.5 py-1 rounded border border-emerald-800/60 transition-colors cursor-pointer font-bold"
+                      >
+                        Cambiar Soporte
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setPreviewImage(null);
+                          setPreviewPdfDataUrl(null);
+                          setSharedFileMeta(null);
+                          setReceivedFromWhatsApp(false);
+                          setIsProcessing(false);
+                        }}
+                        className="text-[11px] text-neutral-400 hover:text-red-400 bg-neutral-900 px-2 py-1 rounded border border-neutral-800 transition-colors cursor-pointer inline-flex items-center gap-1"
+                        title="Quitar soporte actual"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Quitar</span>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -1329,18 +1663,24 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                 <button
                   type="button"
                   onClick={handlePasteFromWhatsAppButton}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-sans font-bold text-xs shadow-sm transition-all cursor-pointer"
+                  disabled={isProcessing}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-sans font-bold text-xs shadow-sm transition-all cursor-pointer"
                   title="Pega con 1 toque el comprobante copiado en WhatsApp sin entrar a la galería"
                 >
-                  <ClipboardPaste className="w-4 h-4 shrink-0" />
+                  {isProcessing && processingLabel === 'Leyendo portapapeles...' ? (
+                    <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                  ) : (
+                    <ClipboardPaste className="w-4 h-4 shrink-0" />
+                  )}
                   <span>Pegar Soporte de WhatsApp</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setShowWhatsAppGuide((prev) => !prev)}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-700/60 font-sans font-bold text-xs transition-all cursor-pointer"
-                  title="Ver cómo enviar el soporte directo desde el botón Compartir de WhatsApp hasta la App"
+                  onClick={handleShareFromWhatsAppButton}
+                  disabled={isProcessing}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-900/50 disabled:opacity-60 text-emerald-300 border border-emerald-700/60 font-sans font-bold text-xs transition-all cursor-pointer"
+                  title="Seleccionar comprobante de WhatsApp (Imagen o PDF) o ver guía de envío directo"
                 >
                   <Share2 className="w-4 h-4 shrink-0 text-emerald-400" />
                   <span>Compartir desde WhatsApp</span>
@@ -1375,29 +1715,39 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                     </p>
                   </div>
 
-                  {!isStandalonePwa && (
-                    <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-800/40">
-                      <span className="text-[11px] text-emerald-200">
-                        {canInstallPwa
-                          ? 'Activa el acceso directo para que "FDV Cobros" aparezca en el menú Compartir de tu WhatsApp:'
-                          : 'Para que "FDV Cobros" aparezca en el menú Compartir de WhatsApp, instala la app desde el menú del navegador (⋮ -> Instalar aplicación).'}
-                      </span>
-                      {canInstallPwa && (
-                        <button
-                          type="button"
-                          onClick={handleEnableWhatsAppShareTarget}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] cursor-pointer transition-colors"
-                        >
-                          Activar en menú Compartir de WhatsApp
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-800/40">
+                    <button
+                      type="button"
+                      onClick={triggerNativeFilePicker}
+                      className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-emerald-300 border border-emerald-700/50 font-bold text-[11px] cursor-pointer transition-colors"
+                    >
+                      Elegir archivo de WhatsApp / Recientes ahora
+                    </button>
+
+                    {!isStandalonePwa && canInstallPwa && (
+                      <button
+                        type="button"
+                        onClick={handleEnableWhatsAppShareTarget}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] cursor-pointer transition-colors"
+                      >
+                        Activar en menú Compartir de WhatsApp
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {!previewImage && !previewPdfDataUrl ? (
-                <label
+              {!previewImage && !previewPdfDataUrl && !(sharedFileMeta && sharedFileMeta.isPdf) ? (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={triggerNativeFilePicker}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      triggerNativeFilePicker();
+                    }
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -1407,31 +1757,31 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                     e.stopPropagation();
                     if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
                       setReceivedFromWhatsApp(true);
-                      handleImageInput(e.dataTransfer.files[0]);
+                      handleImageInput(e.dataTransfer.files[0], true);
                     }
                   }}
-                  className="border-2 border-dashed border-neutral-800 hover:border-red-600 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer bg-neutral-900/40 hover:bg-neutral-900 transition-all text-center min-h-[125px] group"
+                  className="border-2 border-dashed border-neutral-800 hover:border-red-600 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer bg-neutral-900/40 hover:bg-neutral-900 transition-all text-center min-h-[125px] group relative overflow-hidden"
                 >
-                  <Camera className="w-7 h-7 text-neutral-400 group-hover:text-red-500 transition-colors mb-2" />
-                  <span className="text-sm text-neutral-200 font-bold">
-                    Comparte desde WhatsApp (Imagen o PDF), Pega o Toca aquí
-                  </span>
-                  <span className="text-xs text-neutral-500 mt-1 max-w-[320px]">
-                    Acepta <strong>JPG, PNG, WEBP, HEIC</strong> y documentos <strong>PDF</strong> (máx. 10 MB) compartidos directo desde WhatsApp
-                  </span>
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    accept="image/*,.heic,.pdf,application/pdf" 
-                    onChange={e => {
-                      if (e.target.files && e.target.files[0]) {
-                        setReceivedFromWhatsApp(false);
-                        handleImageInput(e.target.files[0]);
-                      }
-                    }} 
-                  />
-                </label>
-              ) : previewPdfDataUrl ? (
+                  {isProcessing ? (
+                    <div className="flex flex-col items-center justify-center py-2">
+                      <Loader2 className="w-7 h-7 text-emerald-500 animate-spin mb-2" />
+                      <span className="text-xs font-bold text-emerald-400 animate-pulse">
+                        {processingLabel || 'Procesando soporte...'}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <Camera className="w-7 h-7 text-neutral-400 group-hover:text-red-500 transition-colors mb-2" />
+                      <span className="text-sm text-neutral-200 font-bold">
+                        Comparte desde WhatsApp (Imagen o PDF), Pega o Toca aquí
+                      </span>
+                      <span className="text-xs text-neutral-500 mt-1 max-w-[320px]">
+                        Acepta <strong>JPG, PNG, WEBP, HEIC</strong> y documentos <strong>PDF</strong> (máx. 10 MB) compartidos directo desde WhatsApp
+                      </span>
+                    </>
+                  )}
+                </div>
+              ) : previewPdfDataUrl || (sharedFileMeta && sharedFileMeta.isPdf) ? (
                 <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex flex-col justify-between p-3.5 min-h-[185px]">
                   <div className="flex items-center justify-between gap-2 pb-2 border-b border-neutral-800">
                     <div className="flex items-center gap-2 min-w-0">
@@ -1443,68 +1793,91 @@ export const CobrosOCRInner: React.FC<CobrosOCRProps> = ({
                           {sharedFileMeta?.name || 'Comprobante_Pago.pdf'}
                         </p>
                         <p className="text-[10px] font-mono text-neutral-400">
-                          Documento PDF &bull; {sharedFileMeta?.size ? `${(sharedFileMeta.size / 1024).toFixed(1)} KB` : 'Validado'}
+                          Documento PDF &bull; {formatFileSize(sharedFileMeta?.size)}
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSelectedReceiptModal({
-                          nombre_cliente: nombreCliente || 'Vista Previa PDF',
-                          referencia: referencia || 'En edición',
-                          fileMimeType: 'application/pdf',
-                          fileDataUrl: previewPdfDataUrl,
-                          fileName: sharedFileMeta?.name || 'Comprobante.pdf'
-                        })
-                      }
-                      className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Ampliar PDF</span>
-                    </button>
+                    {previewPdfDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedReceiptModal({
+                            nombre_cliente: nombreCliente || 'Vista Previa PDF',
+                            referencia: referencia || 'En edición',
+                            fileMimeType: 'application/pdf',
+                            fileDataUrl: previewPdfDataUrl,
+                            fileName: sharedFileMeta?.name || 'Comprobante.pdf'
+                          })
+                        }
+                        className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Ampliar PDF</span>
+                      </button>
+                    )}
                   </div>
 
-                  <div className="mt-2 h-32 rounded-lg overflow-hidden border border-neutral-800 bg-neutral-950">
-                    <iframe
-                      src={previewPdfDataUrl}
-                      title="Previsualización de PDF"
-                      className="w-full h-full border-0"
-                    />
-                  </div>
+                  {previewPdfDataUrl && (
+                    <div className="mt-2 h-32 rounded-lg overflow-hidden border border-neutral-800 bg-neutral-950">
+                      <iframe
+                        src={previewPdfDataUrl}
+                        title="Previsualización de PDF"
+                        className="w-full h-full border-0"
+                      />
+                    </div>
+                  )}
 
                   {isProcessing && (
                     <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center z-10 backdrop-blur-xs">
                       <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-2" />
-                      <span className="text-emerald-400 text-xs font-bold animate-pulse">Extrayendo datos del PDF con Gemini IA...</span>
+                      <span className="text-emerald-400 text-xs font-bold animate-pulse">
+                        {processingLabel || 'Procesando soporte PDF...'}
+                      </span>
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex items-center justify-center h-44 group">
-                  <img src={previewImage!} alt="Comprobante" className="w-full h-full object-contain" />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedReceiptModal({
-                        nombre_cliente: nombreCliente || 'Vista Previa de Soporte',
-                        referencia: referencia || 'En edición',
-                        fileMimeType: 'image/jpeg',
-                        image: previewImage,
-                        fileName: sharedFileMeta?.name || 'soporte_whatsapp.jpg'
-                      })
-                    }
-                    className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-neutral-950/80 hover:bg-neutral-900 text-white text-[11px] font-bold border border-neutral-700 flex items-center gap-1 cursor-pointer"
-                  >
-                    <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Ampliar</span>
-                  </button>
-                  {isProcessing && (
-                    <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center z-10 backdrop-blur-xs">
-                      <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-2" />
-                      <span className="text-emerald-400 text-xs font-bold animate-pulse">Extrayendo datos con Gemini IA...</span>
+                <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden relative flex flex-col">
+                  {/* Cabecera con nombre y peso de la imagen cargada */}
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-neutral-800 bg-neutral-950/60">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="text-xs font-bold text-white truncate">
+                        {sharedFileMeta?.name || 'soporte_whatsapp.jpg'}
+                      </span>
                     </div>
-                  )}
+                    <span className="text-[10px] font-mono text-neutral-400 shrink-0">
+                      {formatFileSize(sharedFileMeta?.size)}
+                    </span>
+                  </div>
+
+                  <div className="relative flex items-center justify-center h-44 group bg-neutral-950/40">
+                    <img src={previewImage!} alt="Comprobante" className="w-full h-full object-contain" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedReceiptModal({
+                          nombre_cliente: nombreCliente || 'Vista Previa de Soporte',
+                          referencia: referencia || 'En edición',
+                          fileMimeType: 'image/jpeg',
+                          image: previewImage,
+                          fileName: sharedFileMeta?.name || 'soporte_whatsapp.jpg'
+                        })
+                      }
+                      className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-neutral-950/80 hover:bg-neutral-900 text-white text-[11px] font-bold border border-neutral-700 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Ampliar</span>
+                    </button>
+                    {isProcessing && (
+                      <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center z-10 backdrop-blur-xs">
+                        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-2" />
+                        <span className="text-emerald-400 text-xs font-bold animate-pulse">
+                          {processingLabel || 'Procesando soporte...'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
