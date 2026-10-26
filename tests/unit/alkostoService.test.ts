@@ -32,30 +32,30 @@ describe('Unit: alkostoService', () => {
     it('should find Alkosto branches by valid tag (case-insensitive and trimmed)', () => {
       const ak01 = getSucursalByTag('AK01');
       expect(ak01).toBeDefined();
-      expect(ak01?.codigo).toBe('007497');
-      expect(ak01?.nombre).toBe('ALKOSTO DONDE COMPRAR ES GANAR, C.A. (AV DELICIAS)');
+      expect(ak01?.codigo).toBe('7498');
+      expect(ak01?.nombre).toBe('Alkosto 1 san Felipe');
 
       const ak02Lower = getSucursalByTag('  ak02  ');
       expect(ak02Lower).toBeDefined();
-      expect(ak02Lower?.codigo).toBe('007498');
-      expect(ak02Lower?.nombre).toBe('ALKOSTO DONDE COMPRAR ES GANAR, C.A. (SAN FELIPE)');
+      expect(ak02Lower?.codigo).toBe('7499');
+      expect(ak02Lower?.nombre).toBe('Alkosto 2 - Plaza baral');
 
-      const akop = getSucursalByTag('AKOP');
-      expect(akop).toBeDefined();
-      expect(akop?.codigo).toBe('001560');
-      expect(akop?.nombre).toBe('ALKOSTO DONDE COMPRAR ES GANAR, C.A.');
+      const ak03 = getSucursalByTag('AK03');
+      expect(ak03).toBeDefined();
+      expect(ak03?.codigo).toBe('7497');
+      expect(ak03?.nombre).toBe('Alkosto 3 - Delicias');
     });
 
     it('should find Familia Center branches by tag', () => {
       const fc01 = getSucursalByTag('FC01');
       expect(fc01).toBeDefined();
-      expect(fc01?.codigo).toBe('007489');
-      expect(fc01?.nombre).toBe('FAMILIA CENTER, C.A (LA LAGO)');
+      expect(fc01?.codigo).toBe('7490');
+      expect(fc01?.nombre).toBe('Familia Center 1 - Plaza lago');
 
-      const fcop = getSucursalByTag('fcop');
-      expect(fcop).toBeDefined();
-      expect(fcop?.codigo).toBe('005373');
-      expect(fcop?.nombre).toBe('FAMILIA CENTER, C.A');
+      const fc05 = getSucursalByTag('fc05');
+      expect(fc05).toBeDefined();
+      expect(fc05?.codigo).toBe('7489');
+      expect(fc05?.nombre).toBe('Familia Center 5 - La lago');
     });
 
     it('should return undefined for non-existent tags or empty inputs', () => {

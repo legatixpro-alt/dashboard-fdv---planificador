@@ -1024,12 +1024,12 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>
-                  ALKOSTO DONDE COMPRAR ES GANAR, C.A.
+                  ALKOSTO (SUCURSALES 1 AL 10)
                 </h2>
-                <p className="text-xs text-neutral-400">Códigos y nombres oficiales registrados en sistema</p>
+                <p className="text-xs text-neutral-400">Cada sucursal con su número, código y descripción oficial</p>
               </div>
               <span className="bg-red-950 border border-red-800 text-red-400 text-xs px-3 py-1 rounded-full font-bold font-mono">
-                {SUCURSALES_ALKOSTO.length} Registros
+                {SUCURSALES_ALKOSTO.length} Sucursales
               </span>
             </div>
 
@@ -1037,18 +1037,18 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-neutral-900 text-neutral-300 font-bold border-b border-neutral-800 uppercase">
                   <tr>
-                    <th className="p-3 w-28 border-r border-neutral-800">ID</th>
-                    <th className="p-3 border-r border-neutral-800">R. SOCIAL</th>
-                    <th className="p-3 border-r border-neutral-800">NOMBRE</th>
+                    <th className="p-3 w-48 border-r border-neutral-800">SUCURSAL</th>
+                    <th className="p-3 w-28 border-r border-neutral-800">CÓDIGO</th>
+                    <th className="p-3 border-r border-neutral-800">DESCRIPCIÓN / DIRECCIÓN</th>
                     <th className="p-3 text-right w-36">ACCIÓN</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800">
                   {SUCURSALES_ALKOSTO.map((suc) => (
                     <tr key={suc.codigo} className="hover:bg-neutral-900/60 transition-colors">
-                      <td className="p-3 font-mono font-bold text-red-400 border-r border-neutral-800">{suc.codigo}</td>
-                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.razonSocial}</td>
                       <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">{suc.nombre}</td>
+                      <td className="p-3 font-mono font-bold text-red-400 border-r border-neutral-800">{suc.codigo}</td>
+                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.direccion}</td>
                       <td className="p-3 text-right">
                         <button
                           type="button"
@@ -1075,12 +1075,12 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                  FAMILIA CENTER, C.A
+                  FAMILIA CENTER (SUCURSALES 1 AL 7)
                 </h2>
-                <p className="text-xs text-neutral-400">Códigos y nombres oficiales registrados en sistema</p>
+                <p className="text-xs text-neutral-400">Cada sucursal con su número, código y descripción oficial</p>
               </div>
               <span className="bg-amber-950 border border-amber-800 text-amber-400 text-xs px-3 py-1 rounded-full font-bold font-mono">
-                {SUCURSALES_FAMILIA_CENTER.length} Registros
+                {SUCURSALES_FAMILIA_CENTER.length} Sucursales
               </span>
             </div>
 
@@ -1088,18 +1088,18 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-neutral-900 text-neutral-300 font-bold border-b border-neutral-800 uppercase">
                   <tr>
-                    <th className="p-3 w-28 border-r border-neutral-800">ID</th>
-                    <th className="p-3 border-r border-neutral-800">R. SOCIAL</th>
-                    <th className="p-3 border-r border-neutral-800">NOMBRE</th>
+                    <th className="p-3 w-48 border-r border-neutral-800">SUCURSAL</th>
+                    <th className="p-3 w-28 border-r border-neutral-800">CÓDIGO</th>
+                    <th className="p-3 border-r border-neutral-800">DESCRIPCIÓN / DIRECCIÓN</th>
                     <th className="p-3 text-right w-36">ACCIÓN</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800">
                   {SUCURSALES_FAMILIA_CENTER.map((suc) => (
                     <tr key={suc.codigo} className="hover:bg-neutral-900/60 transition-colors">
-                      <td className="p-3 font-mono font-bold text-amber-400 border-r border-neutral-800">{suc.codigo}</td>
-                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.razonSocial}</td>
                       <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">{suc.nombre}</td>
+                      <td className="p-3 font-mono font-bold text-amber-400 border-r border-neutral-800">{suc.codigo}</td>
+                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.direccion}</td>
                       <td className="p-3 text-right">
                         <button
                           type="button"

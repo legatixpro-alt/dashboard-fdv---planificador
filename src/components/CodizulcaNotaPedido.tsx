@@ -218,7 +218,7 @@ export function CodizulcaNotaPedido({
   const [clienteNombre, setClienteNombre] = useState(() => {
     if (initialSucursal?.nombre) return initialSucursal.nombre;
     const cad = getInitialCadena();
-    return cad === 'FAMILIA_CENTER' ? 'FAMILIA CENTER, C.A' : 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.';
+    return cad === 'FAMILIA_CENTER' ? SUCURSALES_FAMILIA_CENTER[0].nombre : SUCURSALES_ALKOSTO[0].nombre;
   });
   const [fecha, setFecha] = useState(() => {
     if (initialData?.fechaEntrega) return initialData.fechaEntrega;
@@ -232,7 +232,7 @@ export function CodizulcaNotaPedido({
   const [idCliente, setIdCliente] = useState(() => {
     if (initialSucursal?.codigo) return initialSucursal.codigo;
     const cad = getInitialCadena();
-    return cad === 'FAMILIA_CENTER' ? '005373' : '001560';
+    return cad === 'FAMILIA_CENTER' ? SUCURSALES_FAMILIA_CENTER[0].codigo : SUCURSALES_ALKOSTO[0].codigo;
   });
   const [nroPedido, setNroPedido] = useState('AUTO');
   const [ordenCompraRef, setOrdenCompraRef] = useState(() => {
@@ -336,17 +336,16 @@ export function CodizulcaNotaPedido({
       // Cargar filas consolidadas de inmediato con buildFilasFromData
       setFilas(buildFilasFromData(initialData, 'CONSOLIDADO'));
 
-      if (detectedCadena === 'FAMILIA_CENTER') {
-        setClienteNombre('FAMILIA CENTER, C.A');
-        setIdCliente('005373');
-      } else {
-        setClienteNombre('ALKOSTO DONDE COMPRAR ES GANAR, C.A.');
-        setIdCliente('001560');
-      }
+      const defaultSuc = detectedCadena === 'FAMILIA_CENTER' ? SUCURSALES_FAMILIA_CENTER[0] : SUCURSALES_ALKOSTO[0];
+      setClienteNombre(defaultSuc.nombre);
+      setIdCliente(defaultSuc.codigo);
+      setObservaciones(defaultSuc.direccion);
     } else if (initialSucursal) {
       if (initialSucursal.cadena) setCadenaActiva(initialSucursal.cadena);
       setClienteNombre(initialSucursal.nombre);
       setIdCliente(initialSucursal.codigo);
+      const foundSuc = [...SUCURSALES_ALKOSTO, ...SUCURSALES_FAMILIA_CENTER].find(s => s.codigo === initialSucursal.codigo);
+      if (foundSuc) setObservaciones(foundSuc.direccion);
     } else {
       limpiarFormato();
     }
@@ -355,34 +354,29 @@ export function CodizulcaNotaPedido({
   const [modalCatalogo, setModalCatalogo] = useState(false);
   const [busquedaCatalogo, setBusquedaCatalogo] = useState('');
 
-  // Carga las filas según si es consolidado o una tienda individual (AK01..AK10 o FC01..FC08)
+  // Carga las filas según si es consolidado o una tienda individual (AK01..AK10 o FC01..FC07)
   const cargarFilasSegunTienda = (tienda: string, data = initialData, cadena = cadenaActiva) => {
     const dataFilas = buildFilasFromData(data, tienda);
     setFilas(dataFilas);
 
-    // Actualizar nombre y código de cliente exactamente como aparecen en el maestro oficial
+    // Actualizar nombre, código y descripción de sucursal según listado oficial
     if (tienda !== 'CONSOLIDADO') {
       const suc = getSucursalByTag(tienda);
       if (suc) {
         setClienteNombre(suc.nombre);
         setIdCliente(suc.codigo);
+        setObservaciones(suc.direccion);
       } else {
-        if (tienda.startsWith('FC') || cadena === 'FAMILIA_CENTER') {
-          setClienteNombre('FAMILIA CENTER, C.A');
-          setIdCliente('005373');
-        } else {
-          setClienteNombre('ALKOSTO DONDE COMPRAR ES GANAR, C.A.');
-          setIdCliente('001560');
-        }
+        const fallbackSuc = (tienda.startsWith('FC') || cadena === 'FAMILIA_CENTER') ? SUCURSALES_FAMILIA_CENTER[0] : SUCURSALES_ALKOSTO[0];
+        setClienteNombre(fallbackSuc.nombre);
+        setIdCliente(fallbackSuc.codigo);
+        setObservaciones(fallbackSuc.direccion);
       }
     } else {
-      if (cadena === 'FAMILIA_CENTER') {
-        setClienteNombre('FAMILIA CENTER, C.A');
-        setIdCliente('005373');
-      } else {
-        setClienteNombre('ALKOSTO DONDE COMPRAR ES GANAR, C.A.');
-        setIdCliente('001560');
-      }
+      const defaultSuc = cadena === 'FAMILIA_CENTER' ? SUCURSALES_FAMILIA_CENTER[0] : SUCURSALES_ALKOSTO[0];
+      setClienteNombre(defaultSuc.nombre);
+      setIdCliente(defaultSuc.codigo);
+      setObservaciones(defaultSuc.direccion);
     }
   };
 
@@ -626,7 +620,7 @@ export function CodizulcaNotaPedido({
               id: `alk-${tTag.toLowerCase()}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
               numeroPedido: 'AUTO',
               ordenCompraAlkosto: ordenCompraRef.trim() || undefined,
-              sucursalCodigo: suc?.codigo || '007497',
+              sucursalCodigo: suc?.codigo || '7498',
               sucursalNombre: suc?.nombre || tTag,
               direccionEntrega: suc?.direccion || 'Entrega según orden de compra',
               vendedora: vendedoraNombre.toUpperCase(),
@@ -657,7 +651,7 @@ export function CodizulcaNotaPedido({
               transmitido_a_pedidos_manuales: true,
               fecha_transmision: new Date().toISOString(),
               condicionPago: 'Crédito 21 días',
-              observaciones: observaciones,
+              observaciones: suc?.direccion || observaciones,
               createdAt: new Date(Date.now() + idx * 40).toISOString()
             };
             pedidosParaEnviar.push(pedidoTienda);
@@ -809,7 +803,7 @@ export function CodizulcaNotaPedido({
           {/* SELECTOR DIRECTO DE ID Y NOMBRE OFICIAL DE SUCURSAL */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
             <span className="text-[10px] uppercase font-bold text-neutral-400 shrink-0 flex items-center gap-1">
-              <Store className="w-3.5 h-3.5 text-emerald-400" /> Sede / ID Oficial:
+              <Store className="w-3.5 h-3.5 text-emerald-400" /> Sucursal / Código:
             </span>
             <select
               value={idCliente}
@@ -819,6 +813,7 @@ export function CodizulcaNotaPedido({
                 if (suc) {
                   setIdCliente(suc.codigo);
                   setClienteNombre(suc.nombre);
+                  setObservaciones(suc.direccion);
                   if (suc.tag && tiendasDisponibles.includes(suc.tag)) {
                     setTiendaSeleccionada(suc.tag);
                     setFilas(buildFilasFromData(initialData, suc.tag));
@@ -829,7 +824,7 @@ export function CodizulcaNotaPedido({
             >
               {(cadenaActiva === 'FAMILIA_CENTER' ? SUCURSALES_FAMILIA_CENTER : SUCURSALES_ALKOSTO).map(s => (
                 <option key={s.codigo} value={s.codigo}>
-                  {s.codigo} — {s.nombre}
+                  {s.nombre} — Código: {s.codigo} ({s.direccion})
                 </option>
               ))}
             </select>

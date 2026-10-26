@@ -2139,32 +2139,29 @@ REGLAS CR\xCDTICAS PARA LA LECTURA DE C\xD3DIGOS DE PRODUCTOS:
   });
   const ABREVIATURAS_CONFIG = {
     alkosto: [
-      { codigo: "001560", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AKOP", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A." },
-      { codigo: "007497", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK01", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (AV DELICIAS)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (AV DELICIAS)" },
-      { codigo: "007498", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK02", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (SAN FELIPE)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (SAN FELIPE)" },
-      { codigo: "007499", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK03", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (PLAZA BARALT)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (PLAZA BARALT)" },
-      { codigo: "007500", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK04", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LA COROMOTO)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LA COROMOTO)" },
-      { codigo: "007501", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK05", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (DR. PORTILLO)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (DR. PORTILLO)" },
-      { codigo: "007502", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK06", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (CABIMAS)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (CABIMAS)" },
-      { codigo: "007503", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK07", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LOS CACTUS)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LOS CACTUS)" },
-      { codigo: "007680", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK08", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A." },
-      { codigo: "007905", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK09", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (TRUJILLO)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (TRUJILLO)" },
-      { codigo: "008160", razonSocial: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", tag: "AK10", nombre: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (ZONA INDUSTRIAL)", zona: "ALKOSTO DONDE COMPRAR ES GANAR, C.A.", direccion: "ALKOSTO DONDE COMPRAR ES GANAR, C.A. (ZONA INDUSTRIAL)" }
+      { codigo: "7498", tag: "AK01", nombre: "Alkosto 1 san Felipe", zona: "san Felipe", direccion: "Direcci\xF3n de despacho; calle 98 CC san Felipe 1 nivel PB sector casco central." },
+      { codigo: "7499", tag: "AK02", nombre: "Alkosto 2 - Plaza baral", zona: "Plaza baral", direccion: "Plaza baral" },
+      { codigo: "7497", tag: "AK03", nombre: "Alkosto 3 - Delicias", zona: "Delicias", direccion: "Delicias" },
+      { codigo: "7500", tag: "AK04", nombre: "Alkosto 4 - Coromoto", zona: "Coromoto", direccion: "Coromoto" },
+      { codigo: "7502", tag: "AK05", nombre: "Alkosto 5 - Cabimas", zona: "Cabimas", direccion: "Cabimas" },
+      { codigo: "7503", tag: "AK06", nombre: "Alkosto 6 - Los cactu", zona: "Los cactu", direccion: "Los cactu" },
+      { codigo: "7680", tag: "AK07", nombre: "Alkosto 7 - Bella vista", zona: "Bella vista", direccion: "Bella vista" },
+      { codigo: "7905", tag: "AK08", nombre: "Alkosto 8 - Trujillo", zona: "Trujillo", direccion: "Trujillo" },
+      { codigo: "8160", tag: "AK09", nombre: "Alkosto 9 - Antiguo nasa Zona industrial", zona: "Antiguo nasa Zona industrial", direccion: "Antiguo nasa Zona industrial" },
+      { codigo: "8306", tag: "AK10", nombre: "Alkosto 10 - La limpia", zona: "La limpia", direccion: "La limpia" }
     ],
     familiaCenter: [
-      { codigo: "005373", razonSocial: "FAMILIA CENTER, C.A", tag: "FCOP", nombre: "FAMILIA CENTER, C.A", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A" },
-      { codigo: "007489", razonSocial: "FAMILIA CENTER, C.A", tag: "FC01", nombre: "FAMILIA CENTER, C.A (LA LAGO)", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A (LA LAGO)" },
-      { codigo: "007490", razonSocial: "FAMILIA CENTER, C.A", tag: "FC02", nombre: "FAMILIA CENTER, C.A  (CENTRO PLAZA LAGO)", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A  (CENTRO PLAZA LAGO)" },
-      { codigo: "007491", razonSocial: "FAMILIA CENTER, C.A", tag: "FC03", nombre: "FAMILIA CENTER, C.A (5 DE JULIO)", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A (5 DE JULIO)" },
-      { codigo: "007492", razonSocial: "FAMILIA CENTER, C.A", tag: "FC04", nombre: "FAMILIA CENTER, C.A (URB MONTE CLARO)", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A (URB MONTE CLARO)" },
-      { codigo: "007493", razonSocial: "FAMILIA CENTER, C.A", tag: "FC05", nombre: "FAMILIA CENTER, C.A (LOS OLIVOS)", zona: "FAMILIA CENTER, C.A", direccion: "FAMILIA CENTER, C.A (LOS OLIVOS)" },
-      { codigo: "007494", razonSocial: "FAMILIA CENTER, C.A.", tag: "FC06", nombre: "FAMILIA CENTER, C.A.", zona: "FAMILIA CENTER, C.A.", direccion: "FAMILIA CENTER, C.A." },
-      { codigo: "008144", razonSocial: "FAMILIA CENTER, C.A.", tag: "FC08", nombre: "FAMILIA CENTER, C.A. (PANIFICADORAS)", zona: "FAMILIA CENTER, C.A.", direccion: "FAMILIA CENTER, C.A. (PANIFICADORAS)" },
-      { codigo: "008229", razonSocial: "FAMILIA CENTER, C.A.", tag: "FC07", nombre: "FAMILIA CENTER, C.A. ( SAN FRANCISCO)", zona: "FAMILIA CENTER, C.A.", direccion: "FAMILIA CENTER, C.A. ( SAN FRANCISCO)" }
+      { codigo: "7490", tag: "FC01", nombre: "Familia Center 1 - Plaza lago", zona: "Plaza lago", direccion: "Plaza lago" },
+      { codigo: "7492", tag: "FC02", nombre: "Familia Center 2", zona: "URB monte claro", direccion: "Calle43entre Av 150 416N\xB015-041 URB monte claro" },
+      { codigo: "7494", tag: "FC03", nombre: "Familia Center 3", zona: "Parroquia Coquivacoa", direccion: "CalleJ con Av 12 distinguido bajo el NJ-10 de nomenclatura municipal en jurisdicci\xF3n parroquia coquivacoa el municipio aut\xF3nomo Maracaibo estado Zulia." },
+      { codigo: "7491", tag: "FC04", nombre: "Familia 4 - Dr quintero", zona: "Dr quintero", direccion: "Dr quintero" },
+      { codigo: "7489", tag: "FC05", nombre: "Familia Center 5 - La lago", zona: "La lago", direccion: "La lago" },
+      { codigo: "7493", tag: "FC06", nombre: "Familia 6 - Los olivos", zona: "Los olivos", direccion: "Los olivos" },
+      { codigo: "8229", tag: "FC07", nombre: "Familia Center #7 - San Francisco", zona: "San Francisco", direccion: "San Francisco" }
     ],
     tags: {
       alkosto: ["AK01", "AK02", "AK03", "AK04", "AK05", "AK06", "AK07", "AK08", "AK09", "AK10"],
-      familiaCenter: ["FC01", "FC02", "FC03", "FC04", "FC05", "FC06", "FC07", "FC08"]
+      familiaCenter: ["FC01", "FC02", "FC03", "FC04", "FC05", "FC06", "FC07"]
     }
   };
   app2.get("/api/cadenas/sucursales", async (req, res) => {
