@@ -80,6 +80,7 @@ export function AlkostoTab({ vendedoraNombre = 'SAIRU VALLES', userRole = 'VENDE
   const [alertaExito, setAlertaExito] = useState<string | null>(null);
   const [alertaError, setAlertaError] = useState<string | null>(null);
   const [pedidoDetalle, setPedidoDetalle] = useState<AlkostoOrder | null>(null);
+  const [selectedSucursalForFormato, setSelectedSucursalForFormato] = useState<{ codigo: string; nombre: string; cadena?: 'ALKOSTO' | 'FAMILIA_CENTER' } | null>(null);
 
   // Suscripción en tiempo real a pedidos de Alkosto y sincronización de abreviaturas
   useEffect(() => {
@@ -293,7 +294,7 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
     const baseList = historialTab === 'pendientes' ? pedidosPendientes : pedidosTransmitidos;
     return baseList.filter(o => {
       if (filtroEstado !== 'TODOS' && o.estado !== filtroEstado) return false;
-      if (filtroSucursal !== 'TODAS' && o.sucursalCodigo !== filtroSucursal) return false;
+      if (filtroSucursal !== 'TODAS' && o.sucursalCodigo.replace(/^0+/, '') !== filtroSucursal.replace(/^0+/, '')) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const coincideNum = (o.numeroPedido || o.correlativo || '').toLowerCase().includes(q);
@@ -503,11 +504,13 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
 
           {/* RENDER DEL FORMATO EXACTO CODIZULCA */}
           <CodizulcaNotaPedido 
-            key={parsedOCData ? `oc-${parsedOCData.ordenNro || 'doc'}-${ocLoadKey}` : `oc-empty-${ocLoadKey}`}
+            key={parsedOCData ? `oc-${parsedOCData.ordenNro || 'doc'}-${ocLoadKey}` : `oc-empty-${ocLoadKey}-${selectedSucursalForFormato?.codigo || ''}`}
             initialData={parsedOCData}
+            initialSucursal={selectedSucursalForFormato}
             vendedoraNombre={vendedoraNombre}
             onOrderSaved={() => {
               setParsedOCData(null);
+              setSelectedSucursalForFormato(null);
               setOcLoadKey(k => k + 1);
               setAlertaExito('¡Orden(es) enviada(s) con éxito a Sala de Espera! Formato limpio y preparado para cargar o escanear la siguiente Orden de Compra.');
               setTimeout(() => setAlertaExito(null), 6000);
@@ -757,14 +760,14 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
                 className="bg-neutral-900 border border-neutral-800 text-xs text-white rounded-xl px-3 py-2 focus:outline-none"
               >
                 <option value="TODAS">Todas las Sucursales</option>
-                <optgroup label="Alkosto (AK01 - AK10)">
+                <optgroup label="ALKOSTO DONDE COMPRAR ES GANAR, C.A.">
                   {SUCURSALES_ALKOSTO.map(s => (
-                    <option key={s.codigo} value={s.codigo}>{s.tag || ''} - {s.nombre}</option>
+                    <option key={s.codigo} value={s.codigo}>{s.codigo} - {s.nombre}</option>
                   ))}
                 </optgroup>
-                <optgroup label="Familia Center (FC01 - FC07)">
+                <optgroup label="FAMILIA CENTER, C.A">
                   {SUCURSALES_FAMILIA_CENTER.map(s => (
-                    <option key={s.codigo} value={s.codigo}>{s.tag || ''} - {s.nombre}</option>
+                    <option key={s.codigo} value={s.codigo}>{s.codigo} - {s.nombre}</option>
                   ))}
                 </optgroup>
               </select>
@@ -1011,147 +1014,109 @@ ${pedido.observaciones ? `💬 *Observaciones:* ${pedido.observaciones}` : ''}
       )}
 
       {/* ============================================================== */}
-      {/* VISTA 4: RESUMEN DE SUCURSALES Y ABREVIATURAS DE CADENAS */}
+      {/* VISTA 4: RESUMEN DE SUCURSALES Y CÓDIGOS OFICIALES DE CADENAS */}
       {/* ============================================================== */}
       {activeView === 'resumen' && (
         <div className="space-y-6">
           {/* SECCIÓN 1: ALKOSTO */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 shadow-xl space-y-6">
-            <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>
-                  Red de Sucursales ALKOSTO (AK01 - AK10)
+                  ALKOSTO DONDE COMPRAR ES GANAR, C.A.
                 </h2>
-                <p className="text-xs text-neutral-400">Abreviaturas oficiales sincronizadas para pedidos y órdenes de compra</p>
+                <p className="text-xs text-neutral-400">Códigos y nombres oficiales registrados en sistema</p>
               </div>
               <span className="bg-red-950 border border-red-800 text-red-400 text-xs px-3 py-1 rounded-full font-bold font-mono">
-                10 Tiendas + AKOP
+                {SUCURSALES_ALKOSTO.length} Registros
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {SUCURSALES_ALKOSTO.map((suc) => {
-                const pedidosSucursal = orders.filter(o => o.sucursalCodigo === suc.codigo);
-                const totalKilosSuc = pedidosSucursal.reduce((acc, o) => acc + (o.totalKilos || 0), 0);
-
-                return (
-                  <div
-                    key={suc.codigo}
-                    className="bg-neutral-900/60 border border-neutral-800 rounded-xl p-4 space-y-3"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[10px] font-mono text-red-400 font-bold">
-                            CÓDIGO #{suc.codigo}
-                          </span>
-                          {suc.tag && (
-                            <span className="text-[9px] font-mono bg-red-950/80 border border-red-900/60 text-red-300 px-1.5 py-0.2 rounded font-bold">
-                              {suc.tag}
-                            </span>
-                          )}
-                        </div>
-                        <h3 className="text-sm font-bold text-white uppercase">{suc.nombre}</h3>
-                        <span className="text-xs text-neutral-400">{suc.zona}</span>
-                      </div>
-                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-neutral-800 text-neutral-300">
-                        {pedidosSucursal.length} pedidos
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-neutral-400 leading-tight">
-                      📍 {suc.direccion}
-                    </p>
-
-                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-xs font-mono">
-                      <span className="text-neutral-500">Kilos acumulados:</span>
-                      <strong className="text-emerald-400">{totalKilosSuc.toFixed(1)} kg</strong>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveView('formato');
-                      }}
-                      className="w-full bg-neutral-800 hover:bg-red-600 text-white font-bold text-xs py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Crear Nota para {suc.tag || suc.nombre}</span>
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto border border-neutral-800 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-neutral-900 text-neutral-300 font-bold border-b border-neutral-800 uppercase">
+                  <tr>
+                    <th className="p-3 w-28 border-r border-neutral-800">ID</th>
+                    <th className="p-3 border-r border-neutral-800">R. SOCIAL</th>
+                    <th className="p-3 border-r border-neutral-800">NOMBRE</th>
+                    <th className="p-3 text-right w-36">ACCIÓN</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800">
+                  {SUCURSALES_ALKOSTO.map((suc) => (
+                    <tr key={suc.codigo} className="hover:bg-neutral-900/60 transition-colors">
+                      <td className="p-3 font-mono font-bold text-red-400 border-r border-neutral-800">{suc.codigo}</td>
+                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.razonSocial}</td>
+                      <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">{suc.nombre}</td>
+                      <td className="p-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSucursalForFormato({ codigo: suc.codigo, nombre: suc.nombre, cadena: 'ALKOSTO' });
+                            setActiveView('formato');
+                          }}
+                          className="bg-neutral-800 hover:bg-red-600 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Crear Nota</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
           {/* SECCIÓN 2: FAMILIA CENTER */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 shadow-xl space-y-6">
-            <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                  Red de Sucursales FAMILIA CENTER (FC01 - FC07)
+                  FAMILIA CENTER, C.A
                 </h2>
-                <p className="text-xs text-neutral-400">Abreviaturas oficiales sincronizadas para pedidos y órdenes de compra</p>
+                <p className="text-xs text-neutral-400">Códigos y nombres oficiales registrados en sistema</p>
               </div>
               <span className="bg-amber-950 border border-amber-800 text-amber-400 text-xs px-3 py-1 rounded-full font-bold font-mono">
-                7 Tiendas + FCOP
+                {SUCURSALES_FAMILIA_CENTER.length} Registros
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {SUCURSALES_FAMILIA_CENTER.map((suc) => {
-                const pedidosSucursal = orders.filter(o => o.sucursalCodigo === suc.codigo);
-                const totalKilosSuc = pedidosSucursal.reduce((acc, o) => acc + (o.totalKilos || 0), 0);
-
-                return (
-                  <div
-                    key={suc.codigo}
-                    className="bg-neutral-900/60 border border-neutral-800 rounded-xl p-4 space-y-3"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[10px] font-mono text-amber-400 font-bold">
-                            CÓDIGO #{suc.codigo}
-                          </span>
-                          {suc.tag && (
-                            <span className="text-[9px] font-mono bg-amber-950/80 border border-amber-900/60 text-amber-300 px-1.5 py-0.2 rounded font-bold">
-                              {suc.tag}
-                            </span>
-                          )}
-                        </div>
-                        <h3 className="text-sm font-bold text-white uppercase">{suc.nombre}</h3>
-                        <span className="text-xs text-neutral-400">{suc.zona}</span>
-                      </div>
-                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-neutral-800 text-neutral-300">
-                        {pedidosSucursal.length} pedidos
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-neutral-400 leading-tight">
-                      📍 {suc.direccion}
-                    </p>
-
-                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-xs font-mono">
-                      <span className="text-neutral-500">Kilos acumulados:</span>
-                      <strong className="text-emerald-400">{totalKilosSuc.toFixed(1)} kg</strong>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveView('formato');
-                      }}
-                      className="w-full bg-neutral-800 hover:bg-amber-600 text-white font-bold text-xs py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Crear Nota para {suc.tag || suc.nombre}</span>
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto border border-neutral-800 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-neutral-900 text-neutral-300 font-bold border-b border-neutral-800 uppercase">
+                  <tr>
+                    <th className="p-3 w-28 border-r border-neutral-800">ID</th>
+                    <th className="p-3 border-r border-neutral-800">R. SOCIAL</th>
+                    <th className="p-3 border-r border-neutral-800">NOMBRE</th>
+                    <th className="p-3 text-right w-36">ACCIÓN</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800">
+                  {SUCURSALES_FAMILIA_CENTER.map((suc) => (
+                    <tr key={suc.codigo} className="hover:bg-neutral-900/60 transition-colors">
+                      <td className="p-3 font-mono font-bold text-amber-400 border-r border-neutral-800">{suc.codigo}</td>
+                      <td className="p-3 font-sans text-neutral-300 border-r border-neutral-800">{suc.razonSocial}</td>
+                      <td className="p-3 font-sans font-bold text-white border-r border-neutral-800">{suc.nombre}</td>
+                      <td className="p-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSucursalForFormato({ codigo: suc.codigo, nombre: suc.nombre, cadena: 'FAMILIA_CENTER' });
+                            setActiveView('formato');
+                          }}
+                          className="bg-neutral-800 hover:bg-amber-600 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Crear Nota</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

@@ -16,6 +16,7 @@ const STORAGE_KEY = 'dashboard_fdv_alkosto_orders_cache';
 
 export interface AlkostoSucursal {
   codigo: string;
+  razonSocial: string;
   tag?: string;
   nombre: string;
   zona: string;
@@ -25,33 +26,34 @@ export interface AlkostoSucursal {
 }
 
 export const SUCURSALES_ALKOSTO: AlkostoSucursal[] = [
-  { codigo: '7497', tag: 'AK01', nombre: 'Alkosto 01 - Zona Industrial', zona: 'Maracaibo Sur', direccion: 'Av. 68 con Calle 148, Zona Industrial' },
-  { codigo: '7498', tag: 'AK02', nombre: 'Alkosto 02 - La Limpia', zona: 'Maracaibo Oeste', direccion: 'Av. 28 La Limpia con Calle 79' },
-  { codigo: '7499', tag: 'AK03', nombre: 'Alkosto 03 - Delicias Norte', zona: 'Maracaibo Norte', direccion: 'Av. 15 Las Delicias, CC Delicias Plaza' },
-  { codigo: '7500', tag: 'AK04', nombre: 'Alkosto 04 - Circunvalación 2', zona: 'Maracaibo Centro-Oeste', direccion: 'Av. Circunvalación 2, Sector Sabaneta' },
-  { codigo: '7501', tag: 'AK05', nombre: 'Alkosto 05 - Bella Vista', zona: 'Maracaibo Este', direccion: 'Calle 72 con Av. 4 Bella Vista' },
-  { codigo: '7502', tag: 'AK06', nombre: 'Alkosto 06 - San Francisco', zona: 'San Francisco', direccion: 'Av. 40 con Calle 161, San Francisco' },
-  { codigo: '7503', tag: 'AK07', nombre: 'Alkosto 07 - Curva de Molina', zona: 'Maracaibo Nor-Oeste', direccion: 'Av. La Limpia Oeste, Curva de Molina' },
-  { codigo: '7680', tag: 'AK08', nombre: 'Alkosto 08 - El Milagro', zona: 'Maracaibo Norte', direccion: 'Av. 2 El Milagro frente a Vereda del Lago' },
-  { codigo: '7905', tag: 'AK09', nombre: 'Alkosto 09 - La Coromoto', zona: 'San Francisco', direccion: 'Urb. La Coromoto, Av. 40' },
-  { codigo: '8160', tag: 'AK10', nombre: 'Alkosto 10 - Cabimas', zona: 'Costa Oriental del Lago', direccion: 'Av. Intercomunal Sector Las Cabillas, Cabimas' },
-  { codigo: '1560', tag: 'AKOP', nombre: 'Alkosto Sede Principal / AKOP', zona: 'Maracaibo Paraíso', direccion: 'Calle 78 Dr Portillo Local 17-71 Sector Paraíso' }
+  { codigo: '001560', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AKOP', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.' },
+  { codigo: '007497', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK01', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (AV DELICIAS)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (AV DELICIAS)' },
+  { codigo: '007498', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK02', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (SAN FELIPE)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (SAN FELIPE)' },
+  { codigo: '007499', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK03', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (PLAZA BARALT)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (PLAZA BARALT)' },
+  { codigo: '007500', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK04', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LA COROMOTO)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LA COROMOTO)' },
+  { codigo: '007501', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK05', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (DR. PORTILLO)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (DR. PORTILLO)' },
+  { codigo: '007502', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK06', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (CABIMAS)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (CABIMAS)' },
+  { codigo: '007503', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK07', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LOS CACTUS)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (LOS CACTUS)' },
+  { codigo: '007680', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK08', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.' },
+  { codigo: '007905', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK09', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (TRUJILLO)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (TRUJILLO)' },
+  { codigo: '008160', razonSocial: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', tag: 'AK10', nombre: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (ZONA INDUSTRIAL)', zona: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A.', direccion: 'ALKOSTO DONDE COMPRAR ES GANAR, C.A. (ZONA INDUSTRIAL)' }
 ];
 
 export const SUCURSALES_FAMILIA_CENTER: AlkostoSucursal[] = [
-  { codigo: '7489', tag: 'FC01', nombre: 'Familia Center 01', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 01' },
-  { codigo: '7490', tag: 'FC02', nombre: 'Familia Center 02', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 02' },
-  { codigo: '7491', tag: 'FC03', nombre: 'Familia Center 03', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 03' },
-  { codigo: '7492', tag: 'FC04', nombre: 'Familia Center 04', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 04' },
-  { codigo: '7493', tag: 'FC05', nombre: 'Familia Center 05', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 05' },
-  { codigo: '7494', tag: 'FC06', nombre: 'Familia Center 06', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 06' },
-  { codigo: '8229', tag: 'FC07', nombre: 'Familia Center 07', zona: 'Maracaibo', direccion: 'Familia Center Sucursal 07' },
-  { codigo: '5373', tag: 'FCOP', nombre: 'Familia Center Sede Principal / FCOP', zona: 'Maracaibo', direccion: 'Familia Center Sede Principal' }
+  { codigo: '005373', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FCOP', nombre: 'FAMILIA CENTER, C.A', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A' },
+  { codigo: '007489', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FC01', nombre: 'FAMILIA CENTER, C.A (LA LAGO)', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A (LA LAGO)' },
+  { codigo: '007490', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FC02', nombre: 'FAMILIA CENTER, C.A  (CENTRO PLAZA LAGO)', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A  (CENTRO PLAZA LAGO)' },
+  { codigo: '007491', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FC03', nombre: 'FAMILIA CENTER, C.A (5 DE JULIO)', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A (5 DE JULIO)' },
+  { codigo: '007492', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FC04', nombre: 'FAMILIA CENTER, C.A (URB MONTE CLARO)', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A (URB MONTE CLARO)' },
+  { codigo: '007493', razonSocial: 'FAMILIA CENTER, C.A', tag: 'FC05', nombre: 'FAMILIA CENTER, C.A (LOS OLIVOS)', zona: 'FAMILIA CENTER, C.A', direccion: 'FAMILIA CENTER, C.A (LOS OLIVOS)' },
+  { codigo: '007494', razonSocial: 'FAMILIA CENTER, C.A.', tag: 'FC06', nombre: 'FAMILIA CENTER, C.A.', zona: 'FAMILIA CENTER, C.A.', direccion: 'FAMILIA CENTER, C.A.' },
+  { codigo: '008144', razonSocial: 'FAMILIA CENTER, C.A.', tag: 'FC08', nombre: 'FAMILIA CENTER, C.A. (PANIFICADORAS)', zona: 'FAMILIA CENTER, C.A.', direccion: 'FAMILIA CENTER, C.A. (PANIFICADORAS)' },
+  { codigo: '008229', razonSocial: 'FAMILIA CENTER, C.A.', tag: 'FC07', nombre: 'FAMILIA CENTER, C.A. ( SAN FRANCISCO)', zona: 'FAMILIA CENTER, C.A.', direccion: 'FAMILIA CENTER, C.A. ( SAN FRANCISCO)' }
 ];
 
 export const CADENAS_ABREVIATURAS = {
   ALKOSTO: ['AK01', 'AK02', 'AK03', 'AK04', 'AK05', 'AK06', 'AK07', 'AK08', 'AK09', 'AK10'],
-  FAMILIA_CENTER: ['FC01', 'FC02', 'FC03', 'FC04', 'FC05', 'FC06', 'FC07']
+  FAMILIA_CENTER: ['FC01', 'FC02', 'FC03', 'FC04', 'FC05', 'FC06', 'FC07', 'FC08']
 };
 
 export const TODAS_SUCURSALES_CUENTAS_CLAVE: AlkostoSucursal[] = [
@@ -61,7 +63,11 @@ export const TODAS_SUCURSALES_CUENTAS_CLAVE: AlkostoSucursal[] = [
 
 export function getSucursalByTag(tag: string): AlkostoSucursal | undefined {
   const norm = (tag || '').trim().toUpperCase();
-  return TODAS_SUCURSALES_CUENTAS_CLAVE.find(s => s.tag === norm);
+  if (!norm) return undefined;
+  const cleanDigits = norm.replace(/^0+/, '');
+  return TODAS_SUCURSALES_CUENTAS_CLAVE.find(
+    s => s.tag === norm || s.codigo === norm || (cleanDigits && s.codigo.replace(/^0+/, '') === cleanDigits)
+  );
 }
 
 export function detectCadenaFromTagOrName(value: string): 'ALKOSTO' | 'FAMILIA_CENTER' {
