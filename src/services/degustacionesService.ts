@@ -149,7 +149,7 @@ export function subscribeDegustaciones(
           // Ordenar de forma determinística: fecha descendente, luego turno (MAÑANA antes de TARDE), luego vendedor y cliente
           const sortedList = sortDegustacionesOrdenadas(list, false);
           setLocalCache(sortedList);
-          callback(sortedList);
+          callback(sortedList); if (typeof window !== 'undefined' && !(window as any).__gerenciaDegustacionesAutoSynced && sortedList.length > 0) { (window as any).__gerenciaDegustacionesAutoSynced = true; syncAllDegustacionesToGerencia(sortedList).catch(() => {}); }
         } else {
           setLocalCache([]);
           callback([]);
@@ -599,7 +599,7 @@ export async function saveDegustacion(degustacion: Degustacion): Promise<void> {
   syncToGoogleSheets(degustacion).catch(() => {});
 
   // Sincronizar directamente con el Dashboard de Gerencia (https://codizulca-dashboard-4.onrender.com/dashboard/trade)
-  syncToGerenciaDashboard(degustacion).catch(() => {});
+  await syncToGerenciaDashboard(degustacion).catch(() => {});
 }
 
 /**
@@ -636,7 +636,7 @@ export async function updateDegustacion(
 
   if (updatedItem) {
     syncToGoogleSheets(updatedItem).catch(() => {});
-    syncToGerenciaDashboard(updatedItem).catch(() => {});
+    await syncToGerenciaDashboard(updatedItem).catch(() => {});
   }
 }
 
@@ -701,7 +701,7 @@ export function getMondayDeadlineForWeek(dateStr: string): Date {
   const diffToMonday = day === 0 ? -6 : 1 - day;
   const closingMonday = new Date(d);
   closingMonday.setDate(d.getDate() + diffToMonday);
-  closingMonday.setHours(12, 0, 0, 0); // 12:00 PM (mediodía)
+  closingMonday.setHours(17, 0, 0, 0); // 5:00 PM (17:00)
   return closingMonday;
 }
 
@@ -862,7 +862,7 @@ export function checkDateAvailability(
       cuposMananaDisponibles: 0,
       cuposTardeOcupados: 0,
       cuposTardeDisponibles: 0,
-      motivo: 'El agendamiento para esta semana cerró el Lunes a las 12:00 PM. Por favor selecciona una fecha de la siguiente semana.',
+      motivo: 'El agendamiento para esta semana cerró el Lunes a las 5:00 PM. Por favor selecciona una fecha de la siguiente semana.',
       turnosOcupados: [],
       horariosManana: buildHorarios(HORARIOS_MANANA, 'MAÑANA', [], true),
       horariosTarde: buildHorarios(HORARIOS_TARDE, 'TARDE', [], true),

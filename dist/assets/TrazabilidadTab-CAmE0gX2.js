@@ -1,4 +1,4 @@
-import{j as e,h as k,s as _}from"./index-DqSpv41K.js";import{a as r,A as I,b as D,i as w,af as v,j as y,n as O,k as U,ag as z,U as H,g as $}from"./vendor-icons-BXFmvnTk.js";import{g as F}from"./calendar-hkv7SIow.js";import"./vendor-react-Cx8rELkt.js";import"./vendor-pdf-ChO1b1rX.js";import"./vendor-supabase-D_iOwayF.js";import"./vendor-firebase-DG_Ws1Sq.js";const L=`CREATE TABLE trazabilidad_login (
+import{j as e,h as k,s as _}from"./index-CNe-_Aen.js";import{a as r,A as I,b as D,i as w,af as v,j as y,n as O,k as U,ag as z,U as H,g as $}from"./vendor-icons-BXFmvnTk.js";import{g as F}from"./calendar-hkv7SIow.js";import"./vendor-react-Cx8rELkt.js";import"./vendor-pdf-ChO1b1rX.js";import"./vendor-supabase-D_iOwayF.js";import"./vendor-firebase-DG_Ws1Sq.js";const L=`CREATE TABLE trazabilidad_login (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   usuario varchar(255) NOT NULL,
   rol varchar(50) NOT NULL,

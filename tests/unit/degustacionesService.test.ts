@@ -47,19 +47,19 @@ describe('Unit: degustacionesService', () => {
   });
 
   describe('getMondayDeadlineForWeek', () => {
-    it('should return Monday of that week at exactly 12:00:00.000', () => {
+    it('should return Monday of that week at exactly 17:00:00.000 (5:00 PM)', () => {
       // For any date in week 2026-10-12 to 2026-10-18:
       const deadlineThu = getMondayDeadlineForWeek('2026-10-15');
       expect(deadlineThu.getFullYear()).toBe(2026);
       expect(deadlineThu.getMonth()).toBe(9); // 0-indexed October
       expect(deadlineThu.getDate()).toBe(12);
-      expect(deadlineThu.getHours()).toBe(12);
+      expect(deadlineThu.getHours()).toBe(17);
       expect(deadlineThu.getMinutes()).toBe(0);
       expect(deadlineThu.getSeconds()).toBe(0);
 
       const deadlineSun = getMondayDeadlineForWeek('2026-10-18');
       expect(deadlineSun.getDate()).toBe(12);
-      expect(deadlineSun.getHours()).toBe(12);
+      expect(deadlineSun.getHours()).toBe(17);
     });
   });
 

@@ -611,7 +611,7 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-neutral-400">
-                Agendamiento de degustaciones (Jueves, Viernes y Sábados | Habilitado hasta el Lunes a las 12:00 PM | Máx. 5 por vendedor/semana | 18 cupos diarios).
+                Agendamiento de degustaciones (Jueves, Viernes y Sábados | Habilitado hasta el Lunes a las 5:00 PM | Máx. 5 por vendedor/semana | 18 cupos diarios).
               </p>
             </div>
           </div>
@@ -621,7 +621,7 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
             <button
               onClick={handleSyncGerencia}
               disabled={isSyncingGerencia}
-              title="Sincronizar degustaciones con el Dashboard de Gerencia (https://dashboardgerencia01.ai.studio)"
+              title="Sincronizar degustaciones con el Dashboard de Gerencia (https://codizulca-dashboard-4.onrender.com)"
               className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-60 text-neutral-300 hover:text-white px-3 sm:px-4 py-2.5 rounded-xl border border-neutral-800 text-xs font-sans font-bold transition-all active:scale-95 touch-manipulation shadow-sm cursor-pointer"
             >
               <RefreshCw className={`w-4 h-4 text-emerald-400 ${isSyncingGerencia ? 'animate-spin' : ''}`} />
@@ -1223,7 +1223,7 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
                   Calendario de Cupos y Disponibilidad
                 </h2>
                 <p className="text-xs text-neutral-400 mt-0.5">
-                  Días habilitados: <strong className="text-white">Jueves, Viernes y Sábados</strong> | Cierre de agendamiento: <strong className="text-red-400">Lunes 12:00 PM posterior</strong>.
+                  Días habilitados: <strong className="text-white">Jueves, Viernes y Sábados</strong> | Cierre de agendamiento: <strong className="text-red-400">Lunes 5:00 PM posterior</strong>.
                 </p>
               </div>
 
@@ -1264,7 +1264,7 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
                 </span>
                 <span className="flex items-center gap-1.5 text-neutral-500">
                   <span className="w-2.5 h-2.5 rounded-full bg-neutral-700 shrink-0" />
-                  Cerró Lun 12pm / No hab.
+                  Cerró Lun 5pm / No hab.
                 </span>
               </div>
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400 bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-900/50">
@@ -1311,7 +1311,7 @@ export const DegustacionesTab: React.FC<DegustacionesTabProps> = ({
                     statusText = 'Agotado';
                   } else {
                     badgeColor = 'bg-neutral-900 border-neutral-800 text-neutral-500 cursor-pointer';
-                    statusText = avail.motivo && avail.motivo.includes('Lunes a las 12:00 PM') ? 'Cerró Lun 12pm' : 'No disponible';
+                    statusText = avail.motivo && (avail.motivo.includes('Lunes a las 5:00 PM') || avail.motivo.includes('Lunes a las 12:00 PM')) ? 'Cerró Lun 5pm' : 'No disponible';
                   }
                 }
 
